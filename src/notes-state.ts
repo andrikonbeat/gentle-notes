@@ -81,6 +81,22 @@ export function markSent(state: NotesState, id: number, now: number): MutationRe
 	};
 }
 
+/** Inline editing: replace a pending note's text, keeping every other field.
+ * Sent notes refuse to be edited — the prompt already left. */
+export function updateNoteText(state: NotesState, id: number, text: unknown): MutationResult<NotesState> {
+	const note = state.notes.find((candidate) => candidate.id === id);
+	if (!note) return `no note #${id}`;
+	if (note.status === NOTE_STATUS.SENT) return `note #${id} was already sent`;
+	const clean = cleanNoteText(text);
+	if (clean.length === 0) return "note text is required";
+	return {
+		state: {
+			...state,
+			notes: state.notes.map((candidate) => (candidate.id === id ? { ...candidate, text: clean } : candidate)),
+		},
+	};
+}
+
 export function clearNotes(state: NotesState): { state: NotesState; removed: number } {
 	return { state: emptyNotes(), removed: state.notes.length };
 }

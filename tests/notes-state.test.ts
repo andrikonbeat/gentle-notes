@@ -8,6 +8,7 @@ import {
 	isNotesState,
 	markSent,
 	notesSummary,
+	updateNoteText,
 	type NoteTask,
 } from "../src/notes-state.ts";
 
@@ -170,5 +171,47 @@ describe("isNotesState", () => {
 			isNotesState({ notes: [{ id: 1, text: "a", status: "sent", createdAt: 1, sentAt: 5 }], nextId: 2 }),
 			true,
 		);
+	});
+});
+
+describe("updateNoteText", () => {
+	it("updates the text of a pending note preserving every other field", () => {
+		let state = emptyNotes();
+		state = unwrap(addNote(state, "original", 10)).state;
+		const result = unwrap(updateNoteText(state, 1, "  editado  "));
+		const note = result.state.notes[0] as NoteTask;
+		assert.equal(note.text, "editado");
+		assert.equal(note.id, 1);
+		assert.equal(note.status, NOTE_STATUS.PENDING);
+		assert.equal(note.createdAt, 10);
+		assert.equal(note.sentAt, undefined);
+	});
+
+	it("rejects empty text with an error and keeps the state unchanged", () => {
+		const state = unwrap(addNote(emptyNotes(), "x", 1)).state;
+		const before = JSON.stringify(state);
+		const result = updateNoteText(state, 1, "   ");
+		assert.equal(typeof result, "string");
+		assert.equal(JSON.stringify(state), before);
+	});
+
+	it("errors on unknown ids", () => {
+		assert.equal(typeof updateNoteText(emptyNotes(), 9, "nueva"), "string");
+	});
+
+	it("refuses to edit a note that was already sent", () => {
+		let state = emptyNotes();
+		state = unwrap(addNote(state, "mandada", 1)).state;
+		state = unwrap(markSent(state, 1, 2)).state;
+		const result = updateNoteText(state, 1, "cambio tarde");
+		assert.equal(typeof result, "string");
+		assert.equal(state.notes[0]?.text, "mandada");
+	});
+
+	it("does not mutate the input state", () => {
+		const state = unwrap(addNote(emptyNotes(), "x", 1)).state;
+		const before = JSON.stringify(state);
+		unwrap(updateNoteText(state, 1, "y"));
+		assert.equal(JSON.stringify(state), before);
 	});
 });

@@ -94,6 +94,36 @@ describe("buildNotesCard hits", () => {
 	});
 });
 
+describe("buildNotesCard hiddenNoteId (inline edit slot)", () => {
+	it("skips the edited note and reports the row where its editor goes", () => {
+		let state = emptyNotes();
+		state = unwrap(addNote(state, "aa", 1)).state;
+		state = unwrap(addNote(state, "bb", 2)).state;
+		const view = buildNotesCard(state, theme, 46, undefined, 1);
+		assert.deepEqual(view.bodyRows, [`<accent>✉</accent> <text>${"bb".padEnd(42)}</text><muted>➤</muted>`]);
+		assert.deepEqual(view.hits, [{ row: 0, id: 2 }]);
+		assert.equal(view.editSlot, 0);
+		assert.deepEqual(view.summary, { pending: 2, sent: 0, total: 2 });
+	});
+
+	it("places the edit slot after earlier rows", () => {
+		let state = emptyNotes();
+		state = unwrap(addNote(state, "aa", 1)).state;
+		state = unwrap(addNote(state, "bb", 2)).state;
+		const view = buildNotesCard(state, theme, 46, undefined, 2);
+		assert.deepEqual(view.hits, [{ row: 0, id: 1 }]);
+		assert.equal(view.editSlot, 1);
+	});
+
+	it("ignores ids that are not pending notes", () => {
+		let state = emptyNotes();
+		state = unwrap(addNote(state, "aa", 1)).state;
+		const view = buildNotesCard(state, theme, 46, undefined, 99);
+		assert.equal(view.editSlot, undefined);
+		assert.equal(view.hits.length, 1);
+	});
+});
+
 describe("buildNotesCard hover", () => {
 	it("paints the send glyph accent on the hovered row only", () => {
 		let state = emptyNotes();

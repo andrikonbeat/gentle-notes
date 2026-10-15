@@ -1,10 +1,11 @@
 // Integration tests for the gentle-notes extension wiring: registration,
-// session lifecycle, widget installation, the compact row, the interactive
-// rail panel (card chrome + bounded viewport + hover + send click), the
-// keyboard manager, busy queueing, visibility and shutdown. Everything runs
-// against mocks; persistence goes through the real storage queue under a temp
-// config home. The fake theme emits real ANSI escapes (colors + SGR 9), like
-// Pi's themes, so the card measures rows exactly as the live shell does.
+// session lifecycle, widget installation, the compact row, and the rail panel
+// as a live notepad — the card paints by default with its own input row,
+// clicking it takes keyboard focus, Enter saves, Escape returns the keyboard
+// to the chat, and clicking a pending note's text edits it inline. Everything
+// runs against mocks with a faithful setFocus; persistence goes through the
+// real storage queue under a temp config home. The fake theme emits real ANSI
+// escapes, like Pi's themes, so the card measures rows exactly as live.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,11 +35,17 @@ interface Harness {
 	selectCalls: Array<{ title: string; options: string[] }>;
 	widgetCalls: WidgetCall[];
 	fakeTui: TUI;
+	getFocus: () => unknown;
 	setInput: (value: string | undefined) => void;
 	setSelect: (value: string | undefined) => void;
 	setConfirm: (value: boolean) => void;
 	buildWidget: () => Component & { dispose?(): void };
-	rail: () => Component & { digest?(): string; handleMouse?(event: TuiMouseEvent): TuiMouseEventResult };
+	rail: () => Component & {
+		focused?: boolean;
+		digest?(): string;
+		handleInput?(data: string): void;
+		handleMouse?(event: TuiMouseEvent): TuiMouseEventResult;
+	};
 	sessionStart: (cwd: string) => Promise<void>;
 	sessionShutdown: () => Promise<void>;
 	agentStart: () => void;
@@ -76,7 +83,22 @@ function makeHarness(): Harness {
 		bg: (role: string, text: string) => `\x1b[48;5;${role === "toolSuccessBg" ? "22" : "52"}m${text}\x1b[49m`,
 		strikethrough: (text: string) => `\x1b[9m${text}\x1b[29m`,
 	} as unknown as Theme;
-	const fakeTui = { terminal: { rows: 48 }, requestRender() {} } as unknown as TUI;
+
+	// Faithful fake of the TUI focus contract: Focusable components get their
+	// `focused` flag flipped on transitions, like setFocusInternal does.
+	let focusedComponent: Component | null = null;
+	const applyFocus = (component: Component | null, next: boolean): void => {
+		if (component && "focused" in component) (component as unknown as { focused: boolean }).focused = next;
+	};
+	const fakeTui = {
+		terminal: { rows: 48 },
+		requestRender() {},
+		setFocus(component: Component | null) {
+			applyFocus(focusedComponent, false);
+			focusedComponent = component;
+			applyFocus(component, true);
+		},
+	} as unknown as TUI;
 
 	const makeCtx = (cwd: string): ExtensionContext =>
 		({
@@ -134,6 +156,7 @@ function makeHarness(): Harness {
 		selectCalls,
 		widgetCalls,
 		fakeTui,
+		getFocus: () => focusedComponent,
 		setInput: (value) => {
 			inputResult = value;
 		},
@@ -234,8 +257,7 @@ describe("gentle-notes extension wiring", () => {
 	it("loads persisted notes at session start and hides the empty compact row", async () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add yapersistida", project);
-		const after = loadNotes(project);
-		assert.equal(after.notes[0]?.text, "yapersistida");
+		assert.equal(loadNotes(project).notes[0]?.text, "yapersistida");
 
 		// A fresh session over the same project sees the stored note.
 		const second = makeHarness();
@@ -253,29 +275,51 @@ describe("gentle-notes extension wiring", () => {
 		assert.deepEqual(widget.render(80), []);
 	});
 
-	it("adds a note through the manager dialog input", async () => {
+	it("paints the rail card by default, with the input row, even with no notes", async () => {
 		await harness.sessionStart(project);
-		harness.setSelect(MANAGER_ADD);
-		harness.setInput("desde el manager");
-		await harness.runCommand("", project);
-		assert.ok(harness.selectCalls[0]?.title.includes("0 pending"));
-		const state = loadNotes(project);
-		assert.equal(state.notes[0]?.text, "desde el manager");
-		assert.equal(state.notes[0]?.status, NOTE_STATUS.PENDING);
-	});
-
-	it("paints the rail panel with gentle-shell's float card chrome", async () => {
-		await harness.sessionStart(project);
-		await harness.runCommand("add revisar el footer", project);
 		harness.buildWidget();
 		const lines = harness.rail().render(46);
-		// Float panel: padding row, header, padding row, body, closing rule.
+		// Float chrome: padding, header, padding, input row, closing rule.
 		assert.equal(lines.length, 5);
-		assert.ok(lines[0]?.includes("\x1b[48;5;22m"), "the panel paints the tone background");
 		assert.ok(lines[1]?.includes("✿ Notes"), `header carries the card glyph and title: ${lines[1]}`);
-		assert.ok(lines[1]?.includes("1 pend · 0 sent"), "header carries the summary subtitle");
-		assert.ok(lines[1]?.includes("alt+n"), "header carries the keyboard hint");
-		assert.ok(lines[3]?.includes("revisar el footer"), "the note row rides inside the card body");
+		assert.ok(lines[1]?.includes("0 pend · 0 sent"), "header carries the empty summary");
+		assert.ok(lines[3]?.includes("＋") && lines[3]?.includes("rite a note…"), `the input row paints its placeholder: ${lines[3]}`);
+		assert.ok(lines[4]?.includes("\x1b[48;5;22m"), "the panel paints the tone background");
+	});
+
+	it("focuses the input row on click and captures notes with Enter", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+
+		const click = rail.handleMouse?.(mouse("click", 5, 3, 46));
+		assert.equal(click?.handled, true);
+		assert.equal(harness.getFocus(), rail, "the click focuses the rail card");
+		assert.equal(rail.focused, true);
+
+		rail.handleInput?.("una nota rapida");
+		rail.handleInput?.("\r");
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes.map((note) => note.text), ["una nota rapida"]);
+
+		// The field clears itself and keeps the focus for the next note.
+		const after = rail.render(46).join("\n");
+		assert.ok(after.includes("rite a note…"), "the placeholder returns after saving");
+		assert.equal(rail.focused, true, "focus stays for rapid capture");
+	});
+
+	it("returns the keyboard to the chat on Escape", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		assert.equal(harness.getFocus(), rail);
+		rail.handleInput?.("escrita");
+		rail.handleInput?.("\x1b");
+		assert.equal(harness.getFocus(), null, "Escape blurs the card");
+		assert.deepEqual(loadNotes(project).notes, [], "nothing was saved");
 	});
 
 	it("sends a clicked rail row to the chat and marks it sent", async () => {
@@ -327,6 +371,63 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(rail.render(46)[row]?.includes(`${MUTED}➤`), "leaving restores the muted glyph");
 	});
 
+	it("opens inline editing from a click on the note text and commits with Enter", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add corregir el typo", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row } = glyphRow(rail.render(46));
+
+		const edit = rail.handleMouse?.(mouse("click", 10, row, 46));
+		assert.equal(edit?.handled, true);
+		assert.equal(harness.getFocus(), rail, "editing takes the keyboard focus");
+		const editing = rail.render(46).join("\n");
+		assert.ok(!editing.includes("➤"), "the edit row replaces the note row, glyph included");
+
+		rail.handleInput?.("s");
+		rail.handleInput?.("\r");
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes.map((note) => note.text), ["corregir el typos"]);
+		assert.equal(harness.getFocus(), null, "committing the edit returns the keyboard to the chat");
+		assert.ok(rail.render(46).join("\n").includes("➤"), "the note row paints again");
+	});
+
+	it("cancels the inline edit with Escape and keeps the note unchanged", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add dejar igual", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row } = glyphRow(rail.render(46));
+
+		rail.handleMouse?.(mouse("click", 10, row, 46));
+		rail.handleInput?.("x");
+		rail.handleInput?.("\x1b");
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes.map((note) => note.text), ["dejar igual"]);
+		assert.equal(harness.getFocus(), null);
+		assert.ok(rail.render(46).join("\n").includes("➤"), "the note paints again untouched");
+	});
+
+	it("ignores clicks on sent rows: no editing, no sending", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add ya enviada", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+		assert.deepEqual(harness.sent, [{ content: "ya enviada", options: undefined }]);
+
+		const lines = rail.render(46);
+		const sentRow = lines.findIndex((line) => line.includes("\x1b[9m"));
+		assert.ok(sentRow >= 0, "the sent row renders struck through");
+		const result = rail.handleMouse?.(mouse("click", 10, sentRow, 46));
+		assert.notEqual(result?.handled, true);
+		assert.equal(harness.getFocus(), null, "sent rows never take focus");
+		await FLUSH();
+		assert.equal(loadNotes(project).notes[0]?.text, "ya enviada");
+	});
+
 	it("bounds the body viewport like the Todos panel and scrolls the overflow", async () => {
 		await harness.sessionStart(project);
 		for (let id = 1; id <= 6; id++) await harness.runCommand(`add nota numero ${id}`, project);
@@ -334,29 +435,15 @@ describe("gentle-notes extension wiring", () => {
 		(harness.fakeTui.terminal as { rows?: number }).rows = 12;
 		const rail = harness.rail();
 		const first = rail.render(46);
-		// One third of a 12-row terminal, minus chrome, leaves one body row.
 		assert.equal(first.filter((line) => line.includes("nota numero")).length, 1, "only one note is visible");
 		const hint = first[first.length - 1] ?? "";
 		assert.ok(hint.includes("↑↓ 1–1/6"), `overflow hint reports the window: ${hint}`);
 
-		const wheel = rail.handleMouse?.(mouse("wheel", 20, 3, 46, 1));
+		const wheel = rail.handleMouse?.(mouse("wheel", 20, 4, 46, 1));
 		assert.equal(wheel?.handled, true);
 		const second = rail.render(46);
 		const hintAfter = second[second.length - 1] ?? "";
 		assert.ok(hintAfter.includes("↑↓ 2–2/6"), `scrolling advances the window: ${hintAfter}`);
-	});
-
-	it("ignores clicks outside the send glyph", async () => {
-		await harness.sessionStart(project);
-		await harness.runCommand("add no me toques", project);
-		harness.buildWidget();
-		const rail = harness.rail();
-		const { row } = glyphRow(rail.render(46));
-		const result = rail.handleMouse?.(mouse("click", 10, row, 46));
-		assert.notEqual(result?.handled, true);
-		await FLUSH();
-		assert.deepEqual(harness.sent, []);
-		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.PENDING);
 	});
 
 	it("sends a pending note through the keyboard manager", async () => {
@@ -367,6 +454,17 @@ describe("gentle-notes extension wiring", () => {
 		await FLUSH();
 		assert.deepEqual(harness.sent, [{ content: "por teclado", options: undefined }]);
 		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.SENT);
+	});
+
+	it("adds a note through the manager dialog input", async () => {
+		await harness.sessionStart(project);
+		harness.setSelect(MANAGER_ADD);
+		harness.setInput("desde el manager");
+		await harness.runCommand("", project);
+		assert.ok(harness.selectCalls[0]?.title.includes("0 pending"));
+		const state = loadNotes(project);
+		assert.equal(state.notes[0]?.text, "desde el manager");
+		assert.equal(state.notes[0]?.status, NOTE_STATUS.PENDING);
 	});
 
 	it("lists notes and shows help through the command", async () => {

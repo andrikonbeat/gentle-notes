@@ -43,6 +43,9 @@ export interface NotesCardView {
 	bodyRows: string[];
 	hits: NotesCardHit[];
 	summary: NotesSummary;
+	/** Row index where the hidden note's inline editor belongs. Set only when
+	 * hiddenNoteId named a pending note that was skipped from the body. */
+	editSlot?: number;
 }
 
 /** Strip control characters so stored text can never smuggle terminal escapes. */
@@ -112,14 +115,21 @@ export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: numbe
  * long lists into "✓ N sent" + "… K more" exactly like the TODO card. Every
  * pending row that survives folding maps its first physical line to its id so
  * the interactive card can hit-test the send glyph. Empty body for an empty
- * state — callers hide the widget instead. */
-export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number): NotesCardView {
+ * state — callers hide the widget instead. Pass hiddenNoteId while that note
+ * is being edited inline: its rows are skipped and editSlot reports the row
+ * where its editor belongs. */
+export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number): NotesCardView {
 	const summary = notesSummary(state);
 	const pending = state.notes.filter((note) => note.status === NOTE_STATUS.PENDING);
 	const sent = state.notes.filter((note) => note.status === NOTE_STATUS.SENT);
 	const bodyRows: string[] = [];
 	const hits: NotesCardHit[] = [];
+	let editSlot: number | undefined;
 	const pushPending = (note: NoteTask): void => {
+		if (note.id === hiddenNoteId) {
+			editSlot = bodyRows.length;
+			return;
+		}
 		hits.push({ row: bodyRows.length, id: note.id });
 		bodyRows.push(...pendingRowLines(note, theme, inner, hoveredId));
 	};
@@ -133,7 +143,7 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 		for (const note of pending.slice(0, room)) pushPending(note);
 		if (pending.length > room) bodyRows.push(theme.fg("muted", `… ${pending.length - room} more`));
 	}
-	return { bodyRows, hits, summary };
+	return { bodyRows, hits, summary, ...(editSlot !== undefined ? { editSlot } : {}) };
 }
 
 const ANSI_OR_CONTROL = /^\x1b\[[0-9;?]*[A-Za-z]/;
