@@ -81,18 +81,19 @@ describe("pendingRowLines", () => {
 	it("renders one line with the send affordance right-aligned", () => {
 		const lines = pendingRowLines(pendingNote(1, "hola"), theme, 46);
 		assert.deepEqual(lines, [
-			`<accent>✉</accent> <text>${"hola".padEnd(42)}</text><muted>➤</muted>`,
+			`<accent>✉</accent>  <text>${"hola".padEnd(40)}</text>  <muted>➤</muted>`,
 		]);
 	});
 
 	it("wraps long notes and puts the send glyph only on the first line", () => {
 		const lines = pendingRowLines(pendingNote(1, "uno dos tres cuatro cinco seis siete"), theme, 14);
 		assert.deepEqual(lines, [
-			`<accent>✉</accent> <text>${"uno dos".padEnd(10)}</text><muted>➤</muted>`,
-			`  <text>tres</text>`,
-			`  <text>cuatro</text>`,
-			`  <text>cinco seis</text>`,
-			`  <text>siete</text>`,
+			`<accent>✉</accent>  <text>${"uno dos".padEnd(8)}</text>  <muted>➤</muted>`,
+			`   <text>tres</text>`,
+			`   <text>cuatro</text>`,
+			`   <text>cinco</text>`,
+			`   <text>seis</text>`,
+			`   <text>siete</text>`,
 		]);
 	});
 });
@@ -100,14 +101,15 @@ describe("pendingRowLines", () => {
 describe("sentRowLines", () => {
 	it("renders the sent glyph with strikethrough dim text", () => {
 		const lines = sentRowLines(sentNote(1, "hola"), theme, 46);
-		assert.deepEqual(lines, [`<success>✓</success> <dim>~~hola~~</dim>`]);
+		assert.deepEqual(lines, [`<success>✓</success>  <dim>~~hola~~</dim>`]);
 	});
 
 	it("applies strikethrough per physical wrapped line", () => {
 		const lines = sentRowLines(sentNote(1, "uno dos tres"), theme, 12);
 		assert.deepEqual(lines, [
-			`<success>✓</success> <dim>~~uno dos~~</dim>`,
-			`  <dim>~~tres~~</dim>`,
+			`<success>✓</success>  <dim>~~uno~~</dim>`,
+			`   <dim>~~dos~~</dim>`,
+			`   <dim>~~tres~~</dim>`,
 		]);
 	});
 });
@@ -129,9 +131,9 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 		state = unwrap(addNote(state, "cc", 3)).state;
 		const view = buildNotesCard(state, theme, 46);
 		assert.deepEqual(view.bodyRows, [
-			`<accent>✉</accent> <text>${"aa".padEnd(42)}</text><muted>➤</muted>`,
-			`<accent>✉</accent> <text>${"cc".padEnd(42)}</text><muted>➤</muted>`,
-			`<success>✓</success> <dim>~~bb~~</dim>`,
+			`<accent>✉</accent>  <text>${"aa".padEnd(40)}</text>  <muted>➤</muted>`,
+			`<accent>✉</accent>  <text>${"cc".padEnd(40)}</text>  <muted>➤</muted>`,
+			`<success>✓</success>  <dim>~~bb~~</dim>`,
 		]);
 		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 1, id: 3 }]);
 		assert.deepEqual(view.summary, { pending: 2, sent: 1, total: 3 });
@@ -144,8 +146,8 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 		const state = { notes, nextId: 19 };
 		const view = buildNotesCard(state, theme, 40);
 		assert.equal(view.bodyRows.length, 12);
-		assert.equal(view.bodyRows[0], `<success>✓</success> <muted>3 sent</muted>`);
-		assert.equal(view.bodyRows[1], `<accent>✉</accent> <text>${"p1".padEnd(36)}</text><muted>➤</muted>`);
+		assert.equal(view.bodyRows[0], `<success>✓</success>  <muted>3 sent</muted>`);
+		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"p1".padEnd(34)}</text>  <muted>➤</muted>`);
 		assert.equal(view.bodyRows[view.bodyRows.length - 1], `<muted>… 5 more</muted>`);
 		assert.equal(view.hits.length, 10);
 		assert.deepEqual(view.hits[0], { row: 1, id: 1 });
@@ -158,8 +160,8 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 			nextId: 3,
 		};
 		const view = buildNotesCard(state, theme, 14);
-		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 5, id: 2 }]);
-		assert.equal(view.bodyRows.length, 6);
+		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 6, id: 2 }]);
+		assert.equal(view.bodyRows.length, 7);
 	});
 
 	it("paints the send glyph accent on the hovered row only", () => {
@@ -167,8 +169,8 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 		state = unwrap(addNote(state, "aa", 1)).state;
 		state = unwrap(addNote(state, "bb", 2)).state;
 		const view = buildNotesCard(state, theme, 46, 2);
-		assert.equal(view.bodyRows[0], `<accent>✉</accent> <text>${"aa".padEnd(42)}</text><muted>➤</muted>`);
-		assert.equal(view.bodyRows[1], `<accent>✉</accent> <text>${"bb".padEnd(42)}</text><accent>➤</accent>`);
+		assert.equal(view.bodyRows[0], `<accent>✉</accent>  <text>${"aa".padEnd(40)}</text>  <muted>➤</muted>`);
+		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"bb".padEnd(40)}</text>  <accent>➤</accent>`);
 	});
 });
 

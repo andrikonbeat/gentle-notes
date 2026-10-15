@@ -86,28 +86,33 @@ export function wrapNoteText(text: string, width: number): string[] {
 	return lines;
 }
 
-/** Pending rail row: ✉ glyph, text padded to the right edge, ➤ send affordance
- * on the first line (accent while hovered, muted otherwise); wrapped
- * continuations are indented under the glyph. */
+/** Columns of breathing room around the row glyphs (L11): the glyphs never
+ * touch the note text, and wrapped continuations align with its first column. */
+const GLYPH_GAP = 2;
+
+/** Pending rail row: ✉ glyph, air, text padded to the right edge, air, ➤ send
+ * affordance (accent while hovered, muted otherwise); wrapped continuations
+ * indent to the text column. */
 export function pendingRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, hoveredId?: number): string[] {
-	const width = Math.max(1, inner - 4);
+	const width = Math.max(1, inner - GLYPH_GAP * 2 - 2);
 	const segments = wrapNoteText(sanitizeNoteText(note.text), width);
 	const [first = "", ...rest] = segments;
 	const sendRole = hoveredId === note.id ? "accent" : "muted";
 	const lines = [
-		`${theme.fg("accent", NOTE_GLYPH.pending)} ${theme.fg("text", first.padEnd(width))}${theme.fg(sendRole, SEND_GLYPH)}`,
+		`${theme.fg("accent", NOTE_GLYPH.pending)}${" ".repeat(GLYPH_GAP)}${theme.fg("text", first.padEnd(width))}${" ".repeat(GLYPH_GAP)}${theme.fg(sendRole, SEND_GLYPH)}`,
 	];
-	for (const segment of rest) lines.push(`  ${theme.fg("text", segment)}`);
+	for (const segment of rest) lines.push(`${" ".repeat(GLYPH_GAP + 1)}${theme.fg("text", segment)}`);
 	return lines;
 }
 
-/** Sent rail row: ✓ success glyph and the note struck through, dim, per line. */
+/** Sent rail row: ✓ success glyph, air, and the note struck through, dim, per
+ * line; continuations indent to the text column. */
 export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: number): string[] {
-	const width = Math.max(1, inner - 4);
+	const width = Math.max(1, inner - GLYPH_GAP * 2 - 2);
 	const segments = wrapNoteText(sanitizeNoteText(note.text), width);
 	const [first = "", ...rest] = segments;
-	const lines = [`${theme.fg("success", NOTE_GLYPH.sent)} ${theme.fg("dim", theme.strikethrough(first))}`];
-	for (const segment of rest) lines.push(`  ${theme.fg("dim", theme.strikethrough(segment))}`);
+	const lines = [`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("dim", theme.strikethrough(first))}`];
+	for (const segment of rest) lines.push(`${" ".repeat(GLYPH_GAP + 1)}${theme.fg("dim", theme.strikethrough(segment))}`);
 	return lines;
 }
 
@@ -137,7 +142,7 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 		for (const note of pending) pushPending(note);
 		for (const note of sent) bodyRows.push(...sentRowLines(note, theme, inner));
 	} else {
-		if (sent.length > 0) bodyRows.push(`${theme.fg("success", NOTE_GLYPH.sent)} ${theme.fg("muted", `${sent.length} sent`)}`);
+		if (sent.length > 0) bodyRows.push(`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("muted", `${sent.length} sent`)}`);
 		const foldedRows = sent.length > 0 ? 1 : 0;
 		const room = NOTES_ROW_CAP - foldedRows - (pending.length > NOTES_ROW_CAP - foldedRows ? 1 : 0);
 		for (const note of pending.slice(0, room)) pushPending(note);
