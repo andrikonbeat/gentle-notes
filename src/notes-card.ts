@@ -1,14 +1,16 @@
-// Gentle Notes pure rendering: the card lines for the gentle-shell rail and
-// the compact summary row for regular mode. Pure string building — the theme
-// is injected (duck-typed to Pi's Theme: fg + strikethrough) so tests can pin
-// exact output and the module stays free of runtime imports.
+// Gentle Notes pure rendering. Row builders stay plain and theme-injected
+// (duck-typed to Pi's Theme: fg + strikethrough); the rail card's chrome lives
+// in card-chrome.ts (gentle-shell panel replica), and the extension composes
+// the two: buildNotesCard produces body rows and their hit map, the card
+// wrapper adds the frame exactly like the Status/Todos panels.
 //
 // Strikethrough follows the TODO grammar: wrap the text first, then style each
-// physical line, so every line closes its own SGR 9 before padding and rails
-// (mirrors shell-todo.ts taskRow). Glyphs: pending ✉ (accent), sent ✓ (success,
-// dim strikethrough), send affordance ➤ (muted, accent while hovered, rail only).
+// physical line, so every line closes its own SGR 9 before padding and rails.
+// Glyphs: pending ✉ (accent), sent ✓ (success, dim strikethrough), send
+// affordance ➤ (muted, accent while hovered, rail rows only).
 
-import { NOTE_STATUS, notesSummary, type NoteTask, type NotesState } from "./notes-state.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { NOTE_STATUS, notesSummary, type NoteTask, type NotesState, type NotesSummary } from "./notes-state.ts";
 
 export const NOTE_GLYPH = {
 	pending: "✉",
@@ -20,7 +22,7 @@ export type NoteStatusKey = keyof typeof NOTE_GLYPH;
 /** Hoverable send affordance drawn at the end of a pending rail row. */
 export const SEND_GLYPH = "➤";
 
-/** Above this many note rows the sent notes fold into one line (TODO grammar). */
+/** Above this many body rows the sent notes fold into one line (TODO grammar). */
 export const NOTES_ROW_CAP = 12;
 
 export interface NotesCardTheme {
@@ -28,17 +30,19 @@ export interface NotesCardTheme {
 	strikethrough(text: string): string;
 }
 
-/** One clickable pending row inside the rendered card, by physical line. */
+/** One clickable pending row inside the card body, by physical line. */
 export interface NotesCardHit {
-	/** Zero-based line index within the card's own rendered lines. */
+	/** Zero-based line index within the card's body rows. */
 	row: number;
 	/** The pending note that starts on that line; the send glyph sits on it. */
 	id: number;
 }
 
 export interface NotesCardView {
-	lines: string[];
+	/** Pre-fit body rows for a panel body (callers pass panelInnerWidth). */
+	bodyRows: string[];
 	hits: NotesCardHit[];
+	summary: NotesSummary;
 }
 
 /** Strip control characters so stored text can never smuggle terminal escapes. */
@@ -104,42 +108,65 @@ export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: numbe
 	return lines;
 }
 
-function cardHeader(state: NotesState, theme: NotesCardTheme): string {
-	const summary = notesSummary(state);
-	return `${theme.fg("accent", NOTE_GLYPH.pending)} ${theme.fg("text", "Notes")} ${theme.fg("muted", `· ${summary.pending} pend · ${summary.sent} sent`)}`;
-}
-
-/** The full rail card with its hit map: header plus pending rows first, sent
- * rows last, folding long lists into "✓ N sent" + "… K more" exactly like the
- * TODO card. Every pending row that survives folding maps its first physical
- * line to its id so the interactive card can hit-test the send glyph. Returns
- * no lines for an empty state — callers hide the widget instead. */
+/** The card body plus its hit map: pending rows first, sent rows last, folding
+ * long lists into "✓ N sent" + "… K more" exactly like the TODO card. Every
+ * pending row that survives folding maps its first physical line to its id so
+ * the interactive card can hit-test the send glyph. Empty body for an empty
+ * state — callers hide the widget instead. */
 export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number): NotesCardView {
-	if (state.notes.length === 0) return { lines: [], hits: [] };
+	const summary = notesSummary(state);
 	const pending = state.notes.filter((note) => note.status === NOTE_STATUS.PENDING);
 	const sent = state.notes.filter((note) => note.status === NOTE_STATUS.SENT);
-	const lines: string[] = [cardHeader(state, theme)];
+	const bodyRows: string[] = [];
 	const hits: NotesCardHit[] = [];
 	const pushPending = (note: NoteTask): void => {
-		hits.push({ row: lines.length, id: note.id });
-		lines.push(...pendingRowLines(note, theme, inner, hoveredId));
+		hits.push({ row: bodyRows.length, id: note.id });
+		bodyRows.push(...pendingRowLines(note, theme, inner, hoveredId));
 	};
 	if (state.notes.length <= NOTES_ROW_CAP) {
 		for (const note of pending) pushPending(note);
-		for (const note of sent) lines.push(...sentRowLines(note, theme, inner));
+		for (const note of sent) bodyRows.push(...sentRowLines(note, theme, inner));
 	} else {
-		if (sent.length > 0) lines.push(`${theme.fg("success", NOTE_GLYPH.sent)} ${theme.fg("muted", `${sent.length} sent`)}`);
+		if (sent.length > 0) bodyRows.push(`${theme.fg("success", NOTE_GLYPH.sent)} ${theme.fg("muted", `${sent.length} sent`)}`);
 		const foldedRows = sent.length > 0 ? 1 : 0;
 		const room = NOTES_ROW_CAP - foldedRows - (pending.length > NOTES_ROW_CAP - foldedRows ? 1 : 0);
 		for (const note of pending.slice(0, room)) pushPending(note);
-		if (pending.length > room) lines.push(theme.fg("muted", `… ${pending.length - room} more`));
+		if (pending.length > room) bodyRows.push(theme.fg("muted", `… ${pending.length - room} more`));
 	}
-	return { lines, hits };
+	return { bodyRows, hits, summary };
 }
 
-/** Lines-only view of the card (kept for callers that do not hit-test). */
-export function notesCardLines(state: NotesState, theme: NotesCardTheme, inner: number): string[] {
-	return buildNotesCard(state, theme, inner).lines;
+const ANSI_OR_CONTROL = /^\x1b\[[0-9;?]*[A-Za-z]/;
+
+/**
+ * Visible column (0-based) where the send glyph starts in a rendered row,
+ * skipping ANSI escape sequences; undefined when the row has no send glyph.
+ * Hit-testing reads the glyph position off the rendered line itself, so the
+ * click target stays correct in every card style.
+ */
+export function sendGlyphColumn(line: string): number | undefined {
+	let column = 0;
+	let index = 0;
+	while (index < line.length) {
+		if (line[index] === "\x1b") {
+			const match = ANSI_OR_CONTROL.exec(line.slice(index));
+			if (match) {
+				index += match[0].length;
+				continue;
+			}
+		}
+		const codePoint = line.codePointAt(index) as number;
+		const character = String.fromCodePoint(codePoint);
+		if (character === SEND_GLYPH) return column;
+		column += visibleWidth(character);
+		index += character.length;
+	}
+	return undefined;
+}
+
+function summaryHeader(state: NotesState, theme: NotesCardTheme): string {
+	const summary = notesSummary(state);
+	return `${theme.fg("accent", NOTE_GLYPH.pending)} ${theme.fg("text", "Notes")} ${theme.fg("muted", `· ${summary.pending} pend · ${summary.sent} sent`)}`;
 }
 
 /** Compact one-row summary for regular mode: header plus the last pending note
@@ -147,7 +174,7 @@ export function notesCardLines(state: NotesState, theme: NotesCardTheme, inner: 
  * the row is too narrow to hold a useful fragment. */
 export function notesSummaryRow(state: NotesState, theme: NotesCardTheme, inner: number): string {
 	const summary = notesSummary(state);
-	const header = cardHeader(state, theme);
+	const header = summaryHeader(state, theme);
 	if (summary.pending === 0) return header;
 	const lastPending = state.notes.filter((note) => note.status === NOTE_STATUS.PENDING).pop();
 	if (!lastPending) return header;

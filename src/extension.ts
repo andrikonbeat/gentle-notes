@@ -5,10 +5,12 @@
 // compact summary row above the editor in regular mode. All interactions have
 // a keyboard path: the /notes command and the alt+n manager dialog.
 import type { Component, KeyId, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { ScrollView, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { NOTE_STATUS, addNote, clearNotes, emptyNotes, markSent, notesSummary, type NotesState } from "./notes-state.ts";
 import { loadNotes, mutateNotes } from "./storage.ts";
-import { buildNotesCard, notesSummaryRow, type NotesCardTheme } from "./notes-card.ts";
+import { buildNotesCard, notesSummaryRow, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
+import { CARD_GLYPH, CARD_TONE, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
 import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
 
 const WIDGET_KEY = "gentle-notes";
@@ -17,10 +19,14 @@ const SHORTCUT = "alt+n" as KeyId;
 const MANAGER_ADD = "＋ Add a note…";
 const MANAGER_CLEAR = "✕ Clear all notes";
 const MANAGER_CLOSE = "Close";
-/** How many pending notes the manager dialog lists. */
+/** How many leading rows the manager dialog lists. */
 const MANAGER_LIMIT = 20;
-/** Columns from the right edge of a pending row that count as a send hit. */
-const SEND_HIT_COLUMNS = 4;
+/** Columns of tolerance around the send glyph for a click or hover hit. */
+const SEND_HIT_TOLERANCE = 1;
+/** Rail card hint shown in the header rule: the keyboard path. */
+const RAIL_HINT = "alt+n";
+/** Bounded body viewport cap, mirroring the Todos panel budget. */
+const RAIL_BODY_CAP = 16;
 
 const HELP = [
 	"Usage: /notes [add <text> | send [<id>] | list | clear]",
@@ -122,33 +128,86 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		await apply(clearNotes, "Notes cleared");
 	};
 
-	/** The interactive rail card: hover highlights the send glyph, a click on
-	 * it sends the note. Digest covers the snapshot plus hover so the rail memo
-	 * re-renders exactly when something visible changed. */
+	/** The interactive rail panel: gentle-shell's card chrome (Status/Todos
+	 * look, byte-pinned by golden fixtures) with a bounded body viewport and
+	 * a clickable send glyph per pending row, hit-tested off the rendered line
+	 * so the target is exact in every card style. Digest covers the snapshot,
+	 * hover and scroll so the rail memo re-renders on visible change. */
 	const makeRailCard = (theme: Theme): Component & { digest?(): string } => {
-		const cardTheme = theme as unknown as NotesCardTheme;
+		const cardTheme = theme as unknown as CardChromeTheme & NotesCardTheme;
 		let hoveredId: number | undefined;
+		// Widgets are measured as leaves, so the body needs its own viewport,
+		// exactly like the Todos panel: header and closing rule stay outside.
+		const scroll = new ScrollView({ render: () => bodyCache, invalidate() {} }, { follow: "none", overscroll: "contain" });
+		let bodyCache: string[] = [];
+		let lastRender: { output: string[]; bodyStart: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
+
+		/** The pending note under the send glyph at (x, y), if any. */
+		const pendingHitAt = (x: number, y: number): number | undefined => {
+			const last = lastRender;
+			if (!last) return undefined;
+			if (y < last.bodyStart || y >= last.bodyStart + last.visibleRows) return undefined;
+			const hit = last.hits.find((candidate) => candidate.row === y - last.bodyStart + last.scrollTop);
+			if (!hit) return undefined;
+			const line = last.output[y];
+			const column = line !== undefined ? sendGlyphColumn(line) : undefined;
+			if (column === undefined) return undefined;
+			return Math.abs(x - column) <= SEND_HIT_TOLERANCE ? hit.id : undefined;
+		};
+
 		return {
 			render(width: number): string[] {
-				return buildNotesCard(current, cardTheme, width, hoveredId).lines;
+				const tone = CARD_TONE.INFO;
+				const headerRow = panelHeaderRow(cardTheme, width, tone);
+				const inner = panelInnerWidth(cardTheme, width, tone);
+				const view = buildNotesCard(current, cardTheme, inner, hoveredId);
+				const lines = renderCardPanel(
+					{ title: "Notes", subtitle: `${view.summary.pending} pend · ${view.summary.sent} sent`, body: view.bodyRows, tone, glyph: CARD_GLYPH },
+					cardTheme,
+					width,
+					{ expanded: true, hint: RAIL_HINT },
+				);
+				// The body starts after the header (plus the float padding rows)
+				// and ends before the closing rule.
+				const bodyStart = headerRow === 1 ? 3 : 1;
+				const bodyEnd = lines.length - 1;
+				bodyCache = lines.slice(bodyStart, bodyEnd);
+				// Bounded like the Todos panel: at most one third of the screen.
+				const terminalRows = (widgetTui?.terminal as unknown as { rows?: number } | undefined)?.rows ?? 48;
+				const height = Math.min(RAIL_BODY_CAP, Math.floor(terminalRows / 3));
+				const overflow = bodyCache.length + bodyStart + 1 > height;
+				const room = Math.max(1, height - bodyStart - 1 - Number(overflow));
+				scroll.updateLayout(bodyCache.length, room, () => widgetTui?.requestRender());
+				const visible = scroll.render(width).slice(scroll.scrollTop, scroll.scrollTop + scroll.viewportHeight);
+				const output = [...lines.slice(0, bodyStart), ...visible, ...lines.slice(bodyEnd)];
+				if (overflow) output.push(cardTheme.fg("muted", truncateToWidth(`↑↓ ${scroll.scrollTop + 1}–${scroll.scrollTop + visible.length}/${bodyCache.length}`, width)));
+				lastRender = { output, bodyStart, visibleRows: visible.length, scrollTop: scroll.scrollTop, hits: view.hits };
+				return output;
 			},
 			digest(): string {
-				return JSON.stringify([current, hoveredId]);
+				return JSON.stringify([current, hoveredId, scroll.scrollTop]);
 			},
 			handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
-				const { x, y, width } = event;
-				const sendFrom = Math.max(0, width - SEND_HIT_COLUMNS);
 				if (event.type === "move" || event.type === "drag") {
-					const hit = buildNotesCard(current, cardTheme, width, hoveredId).hits.find((candidate) => candidate.row === y);
-					const next = hit && x >= sendFrom ? hit.id : undefined;
+					const next = pendingHitAt(event.x, event.y);
 					if (next === hoveredId) return { handled: true, render: false };
 					hoveredId = next;
 					return { handled: true, render: true };
 				}
 				if (event.type === "click") {
-					const hit = buildNotesCard(current, cardTheme, width, hoveredId).hits.find((candidate) => candidate.row === y);
-					if (hit && x >= sendFrom) {
-						void sendNote(hit.id);
+					const hit = pendingHitAt(event.x, event.y);
+					if (hit !== undefined) {
+						void sendNote(hit);
+						return { handled: true, render: true };
+					}
+					return {};
+				}
+				if (event.type === "wheel") {
+					// Own the wheel only while the body overflows; otherwise the
+					// surrounding rail keeps scrolling its own viewport.
+					const last = lastRender;
+					if (last && last.visibleRows < bodyCache.length) {
+						scroll.scrollBy(event.wheelDelta ?? 0);
 						return { handled: true, render: true };
 					}
 				}

@@ -7,5 +7,14 @@
 	"scripts": {
 		"test": "node --test tests/"
 	},
-	"keywords": ["pi", "pi-coding-agent", "gentle-shell", "gentle-pi", "extension"]
+	"keywords": [
+		"pi",
+		"pi-coding-agent",
+		"gentle-shell",
+		"gentle-pi",
+		"extension"
+	],
+	"devDependencies": {
+		"@earendil-works/pi-tui": "^1.2.0"
+	}
 }

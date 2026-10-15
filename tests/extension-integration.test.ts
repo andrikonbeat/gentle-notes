@@ -1,8 +1,10 @@
 // Integration tests for the gentle-notes extension wiring: registration,
 // session lifecycle, widget installation, the compact row, the interactive
-// rail card (hover + send click), the keyboard manager, busy queueing,
-// visibility and shutdown. Everything runs against mocks; persistence goes
-// through the real storage queue under a temp config home.
+// rail panel (card chrome + bounded viewport + hover + send click), the
+// keyboard manager, busy queueing, visibility and shutdown. Everything runs
+// against mocks; persistence goes through the real storage queue under a temp
+// config home. The fake theme emits real ANSI escapes (colors + SGR 9), like
+// Pi's themes, so the card measures rows exactly as the live shell does.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,8 +16,11 @@ import gentleNotes from "../src/extension.ts";
 import { sidebarState } from "../src/sidebar-interop.ts";
 import { loadNotes } from "../src/storage.ts";
 import { NOTE_STATUS } from "../src/notes-state.ts";
+import { sendGlyphColumn } from "../src/notes-card.ts";
 
 const MANAGER_ADD = "＋ Add a note…";
+const ACCENT = "\x1b[38;5;205m";
+const MUTED = "\x1b[38;5;242m";
 const FLUSH = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 10));
 
 interface WidgetCall {
@@ -27,7 +32,7 @@ interface Harness {
 	sent: Array<{ content: unknown; options?: { deliverAs?: string } }>;
 	notifies: Array<{ message: string; type?: string }>;
 	selectCalls: Array<{ title: string; options: string[] }>;
-	widgetCalls: Array<WidgetCall>;
+	widgetCalls: WidgetCall[];
 	fakeTui: TUI;
 	setInput: (value: string | undefined) => void;
 	setSelect: (value: string | undefined) => void;
@@ -54,11 +59,24 @@ function makeHarness(): Harness {
 	let selectResult: string | undefined;
 	let confirmResult = true;
 
+	// Roles map to distinct 256-color codes so tests can assert styling; bg
+	// arms the float panel painter, exactly like a real Pi theme.
+	const ROLE_CODES: Record<string, string> = {
+		accent: "205",
+		muted: "242",
+		success: "46",
+		dim: "240",
+		text: "252",
+		border: "238",
+		warning: "214",
+		error: "196",
+	};
 	const fakeTheme = {
-		fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
-		strikethrough: (text: string) => `~~${text}~~`,
+		fg: (role: string, text: string) => `\x1b[38;5;${ROLE_CODES[role] ?? "255"}m${text}\x1b[0m`,
+		bg: (role: string, text: string) => `\x1b[48;5;${role === "toolSuccessBg" ? "22" : "52"}m${text}\x1b[49m`,
+		strikethrough: (text: string) => `\x1b[9m${text}\x1b[29m`,
 	} as unknown as Theme;
-	const fakeTui = { terminal: {}, requestRender() {} } as unknown as TUI;
+	const fakeTui = { terminal: { rows: 48 }, requestRender() {} } as unknown as TUI;
 
 	const makeCtx = (cwd: string): ExtensionContext =>
 		({
@@ -105,7 +123,9 @@ function makeHarness(): Harness {
 
 	const latestWidgetFactory = (): ((tui: TUI, theme: Theme) => Component & { dispose?(): void }) | undefined => {
 		const call = widgetCalls[widgetCalls.length - 1];
-		return call && typeof call.content === "function" ? (call.content as typeof latestWidgetFactory extends () => infer F ? F : never) : undefined;
+		return call && typeof call.content === "function"
+			? (call.content as (tui: TUI, theme: Theme) => Component & { dispose?(): void })
+			: undefined;
 	};
 
 	return {
@@ -154,7 +174,7 @@ function makeHarness(): Harness {
 	};
 }
 
-function mouse(type: string, x: number, y: number, width: number): TuiMouseEvent {
+function mouse(type: string, x: number, y: number, width: number, wheelDelta?: number): TuiMouseEvent {
 	return {
 		type,
 		button: "left",
@@ -167,7 +187,17 @@ function mouse(type: string, x: number, y: number, width: number): TuiMouseEvent
 		shift: false,
 		alt: false,
 		ctrl: false,
+		...(wheelDelta !== undefined ? { wheelDelta } : {}),
 	} as TuiMouseEvent;
+}
+
+/** The rendered row that carries the clickable send glyph. */
+function glyphRow(lines: string[]): { row: number; column: number } {
+	const row = lines.findIndex((line) => line.includes("➤"));
+	assert.ok(row >= 0, `no row carries the send glyph: ${JSON.stringify(lines)}`);
+	const column = sendGlyphColumn(lines[row] as string);
+	assert.ok(column !== undefined);
+	return { row, column: column as number };
 }
 
 describe("gentle-notes extension wiring", () => {
@@ -192,8 +222,6 @@ describe("gentle-notes extension wiring", () => {
 	});
 
 	it("registers the notes command, the alt+n shortcut and the lifecycle handlers", async () => {
-		const command = harness.widgetCalls; // placeholder to use harness before session_start
-		assert.ok(command !== undefined);
 		harness.agentStart();
 		harness.agentEnd();
 		await harness.sessionStart(project);
@@ -236,16 +264,28 @@ describe("gentle-notes extension wiring", () => {
 		assert.equal(state.notes[0]?.status, NOTE_STATUS.PENDING);
 	});
 
+	it("paints the rail panel with gentle-shell's float card chrome", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add revisar el footer", project);
+		harness.buildWidget();
+		const lines = harness.rail().render(46);
+		// Float panel: padding row, header, padding row, body, closing rule.
+		assert.equal(lines.length, 5);
+		assert.ok(lines[0]?.includes("\x1b[48;5;22m"), "the panel paints the tone background");
+		assert.ok(lines[1]?.includes("✿ Notes"), `header carries the card glyph and title: ${lines[1]}`);
+		assert.ok(lines[1]?.includes("1 pend · 0 sent"), "header carries the summary subtitle");
+		assert.ok(lines[1]?.includes("alt+n"), "header carries the keyboard hint");
+		assert.ok(lines[3]?.includes("revisar el footer"), "the note row rides inside the card body");
+	});
+
 	it("sends a clicked rail row to the chat and marks it sent", async () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add revisar el footer", project);
 		harness.buildWidget();
 		const rail = harness.rail();
-		const lines = rail.render(46);
-		assert.ok(lines[1]?.includes("revisar el footer"));
-		assert.ok(lines[1]?.includes("<muted>➤</muted>"));
+		const { row, column } = glyphRow(rail.render(46));
 
-		const result = rail.handleMouse?.(mouse("click", 44, 1, 46));
+		const result = rail.handleMouse?.(mouse("click", column, row, 46));
 		assert.equal(result?.handled, true);
 		await FLUSH();
 
@@ -254,8 +294,8 @@ describe("gentle-notes extension wiring", () => {
 		assert.equal(state.notes[0]?.status, NOTE_STATUS.SENT);
 		assert.equal(typeof state.notes[0]?.sentAt, "number");
 		assert.ok(harness.notifies.some((entry) => entry.message.includes("sent to the chat")));
-		const after = rail.render(46);
-		assert.ok(after[1]?.includes("~~revisar el footer~~"), "sent row renders struck through");
+		const after = rail.render(46).join("\n");
+		assert.ok(after.includes("\x1b[9m"), "the sent row renders struck through");
 	});
 
 	it("queues the prompt as a follow-up while the agent is running", async () => {
@@ -263,7 +303,9 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("add en cola", project);
 		harness.buildWidget();
 		harness.agentStart();
-		harness.rail().handleMouse?.(mouse("click", 44, 1, 46));
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column, row, 46));
 		await FLUSH();
 		assert.deepEqual(harness.sent, [{ content: "en cola", options: { deliverAs: "followUp" } }]);
 	});
@@ -273,15 +315,48 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("add hoverme", project);
 		harness.buildWidget();
 		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
 
-		const over = rail.handleMouse?.(mouse("move", 44, 1, 46));
+		const over = rail.handleMouse?.(mouse("move", column, row, 46));
 		assert.equal(over?.handled, true);
 		assert.equal(over?.render, true);
-		assert.ok(rail.render(46)[1]?.includes("<accent>➤</accent>"));
+		assert.ok(rail.render(46)[row]?.includes(`${ACCENT}➤`), "hover paints the accent glyph");
 
-		const out = rail.handleMouse?.(mouse("move", 10, 1, 46));
+		const out = rail.handleMouse?.(mouse("move", 10, row, 46));
 		assert.equal(out?.render, true);
-		assert.ok(rail.render(46)[1]?.includes("<muted>➤</muted>"));
+		assert.ok(rail.render(46)[row]?.includes(`${MUTED}➤`), "leaving restores the muted glyph");
+	});
+
+	it("bounds the body viewport like the Todos panel and scrolls the overflow", async () => {
+		await harness.sessionStart(project);
+		for (let id = 1; id <= 6; id++) await harness.runCommand(`add nota numero ${id}`, project);
+		harness.buildWidget();
+		(harness.fakeTui.terminal as { rows?: number }).rows = 12;
+		const rail = harness.rail();
+		const first = rail.render(46);
+		// One third of a 12-row terminal, minus chrome, leaves one body row.
+		assert.equal(first.filter((line) => line.includes("nota numero")).length, 1, "only one note is visible");
+		const hint = first[first.length - 1] ?? "";
+		assert.ok(hint.includes("↑↓ 1–1/6"), `overflow hint reports the window: ${hint}`);
+
+		const wheel = rail.handleMouse?.(mouse("wheel", 20, 3, 46, 1));
+		assert.equal(wheel?.handled, true);
+		const second = rail.render(46);
+		const hintAfter = second[second.length - 1] ?? "";
+		assert.ok(hintAfter.includes("↑↓ 2–2/6"), `scrolling advances the window: ${hintAfter}`);
+	});
+
+	it("ignores clicks outside the send glyph", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add no me toques", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row } = glyphRow(rail.render(46));
+		const result = rail.handleMouse?.(mouse("click", 10, row, 46));
+		assert.notEqual(result?.handled, true);
+		await FLUSH();
+		assert.deepEqual(harness.sent, []);
+		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.PENDING);
 	});
 
 	it("sends a pending note through the keyboard manager", async () => {
@@ -292,18 +367,6 @@ describe("gentle-notes extension wiring", () => {
 		await FLUSH();
 		assert.deepEqual(harness.sent, [{ content: "por teclado", options: undefined }]);
 		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.SENT);
-	});
-
-	it("ignores clicks outside the send glyph", async () => {
-		await harness.sessionStart(project);
-		await harness.runCommand("add no me toques", project);
-		harness.buildWidget();
-		const rail = harness.rail();
-		const result = rail.handleMouse?.(mouse("click", 10, 1, 46));
-		assert.notEqual(result?.handled, true);
-		await FLUSH();
-		assert.deepEqual(harness.sent, []);
-		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.PENDING);
 	});
 
 	it("lists notes and shows help through the command", async () => {
