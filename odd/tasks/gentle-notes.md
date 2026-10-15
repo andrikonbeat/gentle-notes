@@ -19,7 +19,7 @@ Extensión de Pi/gentle-shell: libreta persistente de tareas pendientes en el ra
 - **T3** · S4,S5 · inline · Render puro de la card (`notes-card`): glyphs, tachado, pliegue, summary + tests. — commit: `2b43376`
 - **T4** · S3,S4 · inline · Extensión activa: comandos `/notes`, atajo `alt+n`, diálogo add/send/list/clear, `sendUserMessage` con `followUp` si busy, evento snapshot + `sidebarPart("notes")`. — commit: `1503b2a`
 - **T5** · S6 · inline · Widget compacto `aboveEditor` para modo regular. — commit: `0375bea` (widget + 13 tests de integración del wiring con mocks de ExtensionAPI/ctx/TUI, 79 totales)
-- **T6** · S1-S6 · inline · README, verificación integrada (carga con `pi --extension`), cierre. — commit: (ver Log L4)
+- **T6** · S1-S6 · inline · README, verificación integrada (carga con `pi --extension`), cierre. — commit: `baae0b0`
 
 ## Log
 
