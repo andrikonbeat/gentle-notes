@@ -15,7 +15,7 @@ Extensión de Pi/gentle-shell: libreta persistente de tareas pendientes en el ra
 ## Tasks
 
 - **T1** · S1,S7 · inline · Clon upstream shallow + parche del rail: sección `notes` en `lib/shell-sidebar-layout.ts` (+ condición `visibility.notes`) en rama del clon. — commit: (pendiente)
-- **T2** · S2,S3 · inline · Scaffold repo + módulos puros `notes-state`/`storage` con RED→GREEN (`node --test`, TS nativo). — commit: (pendiente)
+- **T2** · S2,S3 · inline · Scaffold repo + módulos puros `notes-state`/`storage` con RED→GREEN (`node --test`, TS nativo). — commit: `7f40342`
 - **T3** · S4,S5 · inline · Render puro de la card (`notes-card`): glyphs, tachado, pliegue, summary + tests. — commit: (pendiente)
 - **T4** · S3,S4 · inline · Extensión activa: comandos `/notes`, atajo `alt+n`, diálogo add/send/list/clear, `sendUserMessage` con `followUp` si busy, evento snapshot + `sidebarPart("notes")`. — commit: (pendiente)
 - **T5** · S6 · inline · Widget compacto `aboveEditor` para modo regular. — commit: (pendiente)
