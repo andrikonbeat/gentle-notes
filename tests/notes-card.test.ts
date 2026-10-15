@@ -124,7 +124,7 @@ describe("notesCardLines", () => {
 		state = unwrap(addNote(state, "cc", 3)).state;
 		const lines = notesCardLines(state, theme, 46);
 		assert.deepEqual(lines, [
-			`<accent>✉</accent> <text>Notas</text> <muted>· 2 pend · 1 sent</muted>`,
+			`<accent>✉</accent> <text>Notes</text> <muted>· 2 pend · 1 sent</muted>`,
 			`<accent>✉</accent> <text>${"aa".padEnd(42)}</text><muted>➤</muted>`,
 			`<accent>✉</accent> <text>${"cc".padEnd(42)}</text><muted>➤</muted>`,
 			`<success>✓</success> <dim>~~bb~~</dim>`,
@@ -138,7 +138,7 @@ describe("notesCardLines", () => {
 		const state = { notes, nextId: 19 };
 		const lines = notesCardLines(state, theme, 40);
 		assert.equal(lines.length, 1 + 1 + 10 + 1);
-		assert.equal(lines[0], `<accent>✉</accent> <text>Notas</text> <muted>· 15 pend · 3 sent</muted>`);
+		assert.equal(lines[0], `<accent>✉</accent> <text>Notes</text> <muted>· 15 pend · 3 sent</muted>`);
 		assert.equal(lines[1], `<success>✓</success> <muted>3 sent</muted>`);
 		assert.equal(lines[2], `<accent>✉</accent> <text>${"p1".padEnd(36)}</text><muted>➤</muted>`);
 		assert.equal(lines[lines.length - 1], `<muted>… 5 more</muted>`);
@@ -154,7 +154,7 @@ describe("notesSummaryRow", () => {
 		state = unwrap(markSent(state, 2, 4)).state;
 		assert.equal(
 			notesSummaryRow(state, theme, 60),
-			`<accent>✉</accent> <text>Notas</text> <muted>· 0 pend · 2 sent</muted>`,
+			`<accent>✉</accent> <text>Notes</text> <muted>· 0 pend · 2 sent</muted>`,
 		);
 	});
 
@@ -164,7 +164,7 @@ describe("notesSummaryRow", () => {
 		state = unwrap(addNote(state, "segunda", 2)).state;
 		assert.equal(
 			notesSummaryRow(state, theme, 60),
-			`<accent>✉</accent> <text>Notas</text> <muted>· 2 pend · 0 sent</muted><muted> — "segunda"</muted>`,
+			`<accent>✉</accent> <text>Notes</text> <muted>· 2 pend · 0 sent</muted><muted> — "segunda"</muted>`,
 		);
 	});
 
@@ -172,7 +172,7 @@ describe("notesSummaryRow", () => {
 		const state = unwrap(addNote(emptyNotes(), "revisar el padding del rail en narrow", 1)).state;
 		assert.equal(
 			notesSummaryRow(state, theme, 40),
-			`<accent>✉</accent> <text>Notas</text> <muted>· 1 pend · 0 sent</muted><muted> — "revisar e…"</muted>`,
+			`<accent>✉</accent> <text>Notes</text> <muted>· 1 pend · 0 sent</muted><muted> — "revisar e…"</muted>`,
 		);
 	});
 
@@ -180,14 +180,14 @@ describe("notesSummaryRow", () => {
 		const state = unwrap(addNote(emptyNotes(), "hola", 1)).state;
 		assert.equal(
 			notesSummaryRow(state, theme, 26),
-			`<accent>✉</accent> <text>Notas</text> <muted>· 1 pend · 0 sent</muted>`,
+			`<accent>✉</accent> <text>Notes</text> <muted>· 1 pend · 0 sent</muted>`,
 		);
 	});
 
 	it("renders the empty summary for an empty state", () => {
 		assert.equal(
 			notesSummaryRow(emptyNotes(), theme, 60),
-			`<accent>✉</accent> <text>Notas</text> <muted>· 0 pend · 0 sent</muted>`,
+			`<accent>✉</accent> <text>Notes</text> <muted>· 0 pend · 0 sent</muted>`,
 		);
 	});
 });
