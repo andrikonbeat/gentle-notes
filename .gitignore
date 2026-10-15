@@ -1,0 +1,5 @@
+node_modules/
+upstream/
+.atl/
+*.log
+.DS_Store

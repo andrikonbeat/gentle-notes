@@ -1,0 +1,192 @@
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { afterEach, describe, it } from "node:test";
+import { addNote, emptyNotes, markSent } from "../src/notes-state.ts";
+import {
+	loadNotes,
+	mutateNotes,
+	notesConfigHome,
+	notesFilePath,
+	projectSlug,
+	saveNotes,
+} from "../src/storage.ts";
+
+function unwrap<V>(result: V | string): V {
+	if (typeof result === "string") throw new Error(result);
+	return result;
+}
+
+const bases: string[] = [];
+let counter = 0;
+
+function newBase(): string {
+	const base = mkdtempSync(join(tmpdir(), "gentle-notes-test-"));
+	bases.push(base);
+	return base;
+}
+
+function newProject(base: string): string {
+	const dir = join(base, `Proy ${++counter}`);
+	mkdirSync(dir, { recursive: true });
+	return dir;
+}
+
+afterEach(() => {
+	while (bases.length) rmSync(bases.pop() as string, { recursive: true, force: true });
+});
+
+describe("notesConfigHome", () => {
+	it("honors GENTLE_PI_CONFIG_HOME when set", () => {
+		assert.equal(notesConfigHome({ GENTLE_PI_CONFIG_HOME: "/tmp/x" }), "/tmp/x");
+	});
+
+	it("defaults to ~/.pi/gentle-ai", () => {
+		assert.equal(notesConfigHome({}), join(homedir(), ".pi", "gentle-ai"));
+	});
+});
+
+describe("projectSlug", () => {
+	it("is the sanitized basename plus a stable short hash of the resolved path", () => {
+		const path = "/some/where/My Project!";
+		const hash = createHash("sha256").update(path).digest("hex").slice(0, 8);
+		assert.equal(projectSlug(path), `my-project--${hash}`);
+		assert.equal(projectSlug(path), projectSlug(path));
+	});
+
+	it("disambiguates the same basename under different parents", () => {
+		assert.notEqual(projectSlug("/a/proj"), projectSlug("/b/proj"));
+	});
+
+	it("falls back to a stable slug when the basename has no usable characters", () => {
+		assert.match(projectSlug("/"), /^project--[0-9a-f]{8}$/);
+	});
+});
+
+describe("notesFilePath", () => {
+	it("places one JSON file per project under <configHome>/notes", () => {
+		const env = { GENTLE_PI_CONFIG_HOME: "/tmp/cfg" };
+		const path = notesFilePath("/work/my proj", env);
+		assert.equal(dirname(path), "/tmp/cfg/notes");
+		assert.ok(path.endsWith(".json"));
+		assert.ok(basename(path).startsWith("my-proj--"));
+	});
+});
+
+describe("loadNotes", () => {
+	it("returns an empty state when the file does not exist", () => {
+		const base = newBase();
+		const project = newProject(base);
+		assert.deepEqual(loadNotes(project, { GENTLE_PI_CONFIG_HOME: base }), emptyNotes());
+	});
+
+	it("degrades to an empty state on malformed JSON", () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const path = notesFilePath(project, env);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, "{ not json", "utf8");
+		assert.deepEqual(loadNotes(project, env), emptyNotes());
+	});
+
+	it("degrades to an empty state on a valid JSON with an invalid shape", () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const path = notesFilePath(project, env);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, JSON.stringify({ notes: "x", nextId: 3 }), "utf8");
+		assert.deepEqual(loadNotes(project, env), emptyNotes());
+	});
+});
+
+describe("saveNotes", () => {
+	it("persists a roundtrip of pending and sent notes", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		let state = emptyNotes();
+		state = unwrap(addNote(state, "uno", 10)).state;
+		state = unwrap(addNote(state, "dos", 11)).state;
+		state = unwrap(markSent(state, 1, 20)).state;
+		await saveNotes(project, state, env);
+		assert.deepEqual(loadNotes(project, env), state);
+	});
+
+	it("creates the notes directory and leaves no temp files behind", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const state = unwrap(addNote(emptyNotes(), "a", 1)).state;
+		await saveNotes(project, state, env);
+		const dir = join(base, "notes");
+		assert.equal(existsSync(dir), true);
+		const entries = readdirSync(dir);
+		assert.equal(entries.length, 1);
+		assert.ok(entries[0]?.endsWith(".json"));
+	});
+
+	it("overwrites the previous snapshot in place", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		await saveNotes(project, unwrap(addNote(emptyNotes(), "a", 1)).state, env);
+		await saveNotes(project, unwrap(addNote(emptyNotes(), "b", 2)).state, env);
+		const loaded = loadNotes(project, env);
+		assert.deepEqual(
+			loaded.notes.map((note) => note.text),
+			["b"],
+		);
+	});
+});
+
+describe("mutateNotes", () => {
+	it("applies a mutation and persists it", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const state = await mutateNotes(project, (current) => addNote(current, "hola", 1), env);
+		assert.equal(state.notes.length, 1);
+		assert.deepEqual(loadNotes(project, env), state);
+	});
+
+	it("serializes concurrent read-modify-write operations", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		await Promise.all([
+			mutateNotes(project, (current) => addNote(current, "a", 1), env),
+			mutateNotes(project, (current) => addNote(current, "b", 2), env),
+		]);
+		const loaded = loadNotes(project, env);
+		assert.deepEqual(
+			loaded.notes.map((note) => [note.id, note.text]),
+			[[1, "a"], [2, "b"]],
+		);
+	});
+
+	it("aborts without writing when the mutator returns an error", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const initial = await mutateNotes(project, (current) => addNote(current, "keep", 1), env);
+		await assert.rejects(mutateNotes(project, () => "boom", env), /boom/);
+		assert.deepEqual(loadNotes(project, env), initial);
+	});
+
+	it("skips the write when the mutator returns the same state", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const state = await mutateNotes(project, (current) => addNote(current, "a", 1), env);
+		const path = notesFilePath(project, env);
+		const before = readdirSync(join(base, "notes"));
+		await mutateNotes(project, (current) => ({ state: current }), env);
+		assert.deepEqual(loadNotes(project, env), state);
+		// No atomic-rename churn: the same file entry remains.
+		assert.deepEqual(readdirSync(join(base, "notes")), before);
+	});
+});

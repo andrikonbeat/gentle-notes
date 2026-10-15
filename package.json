@@ -1,0 +1,11 @@
+{
+	"name": "gentle-notes",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Gentle Notes: persistent notepad sidebar for gentle-shell/Pi — capture tasks and send them to the chat as prompts",
+	"scripts": {
+		"test": "node --test tests/"
+	},
+	"keywords": ["pi", "pi-coding-agent", "gentle-shell", "gentle-pi", "extension"]
+}
