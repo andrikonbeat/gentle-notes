@@ -10,8 +10,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { NOTE_STATUS, addNote, clearNotes, emptyNotes, markSent, notesSummary, updateNoteText, type NotesState } from "./notes-state.ts";
 import { loadNotes, mutateNotes } from "./storage.ts";
 import { buildCompactNotesRow, buildNotesCard, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
-import { CARD_GLYPH, CARD_TONE, cardLine, paintPanelRows, panelContentColumn, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
+import { CARD_GLYPH, CARD_TONE, cardLine, paintPanelRows, panelBodyWidth, panelContentColumn, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
 import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
+
 
 const WIDGET_KEY = "gentle-notes";
 const COMMAND_NAME = "notes";
@@ -209,19 +210,23 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					{ expanded: true, hint: RAIL_HINT },
 				);
 				const headRows = headerRow === 1 ? 3 : 1;
+				// Rows composed outside renderCardPanel render at the inner
+				// body width: paintPanelRows' float margins must land on the
+				// requested width exactly, or the rail turns itself off.
+				const bodyWidth = panelBodyWidth(cardTheme, width, tone);
 				bodyCache = lines.slice(headRows, lines.length - 1);
 				let editBlock: string[] | undefined;
 				if (editingId !== undefined && view.editSlot !== undefined) {
-					editBlock = paintPanelRows(editInput.render(inner).slice(1, -1).map((row) => cardLine(row, tone, cardTheme, width)), cardTheme, width, tone);
+					editBlock = paintPanelRows(editInput.render(inner).slice(1, -1).map((row) => cardLine(row, tone, cardTheme, bodyWidth)), cardTheme, width, tone);
 					bodyCache.splice(view.editSlot, 0, ...editBlock);
 				}
 				// The card is the field's frame: the editor's own border rows
 				// drop out and its content rows dress in the panel background,
 				// so the wrapping field reads as part of the block.
-				const fieldContent = input.render(inner).slice(1, -1).map((row) => cardLine(row, tone, cardTheme, width));
+				const fieldContent = input.render(inner).slice(1, -1).map((row) => cardLine(row, tone, cardTheme, bodyWidth));
 				if (input.getText().trim().length === 0 && !input.focused && fieldContent.length >= 1) {
 					// An empty, unfocused field paints its affordance instead of a blank.
-					fieldContent[0] = cardLine(cardTheme.fg("muted", "＋ Write a note…"), tone, cardTheme, width);
+					fieldContent[0] = cardLine(cardTheme.fg("muted", "＋ Write a note…"), tone, cardTheme, bodyWidth);
 				}
 				const fieldRows = paintPanelRows(fieldContent, cardTheme, width, tone);
 				// Bounded like the Todos panel: at most one third of the screen,
@@ -234,7 +239,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				const visible = scroll.render(width).slice(scroll.scrollTop, scroll.scrollTop + scroll.viewportHeight);
 				const notesStart = headRows + fieldRows.length;
 				const output = [...lines.slice(0, headRows), ...fieldRows, ...visible, ...lines.slice(lines.length - 1)];
-				if (overflow) output.push(cardTheme.fg("muted", truncateToWidth(`↑↓ ${scroll.scrollTop + 1}–${scroll.scrollTop + visible.length}/${bodyCache.length}`, width)));
+				if (overflow) output.push(...paintPanelRows([cardTheme.fg("muted", truncateToWidth(`↑↓ ${scroll.scrollTop + 1}–${scroll.scrollTop + visible.length}/${bodyCache.length}`, bodyWidth))], cardTheme, width, tone));
 				lastRender = {
 					output,
 					headRows,
@@ -388,6 +393,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 			},
 			invalidate(): void {},
 		};
+		return widget;
 	};
 
 	const widgetFactory = (tui: TUI, theme: Theme): Component & { dispose?(): void } => {

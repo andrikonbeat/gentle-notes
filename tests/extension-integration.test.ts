@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import gentleNotes from "../src/extension.ts";
@@ -475,6 +476,31 @@ describe("gentle-notes extension wiring", () => {
 		assert.equal(harness.getFocus(), null, "sent rows never take focus");
 		await FLUSH();
 		assert.equal(loadNotes(project).notes[0]?.text, "ya enviada");
+	});
+
+	it("renders every line within the requested width — the rail turns itself off on overflow", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add una nota para el chequeo de contraccion del rail", project);
+		const compact = harness.buildWidget();
+		const rail = harness.rail();
+		// The wrapping field is the risk surface: typing grows its rows.
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		rail.handleInput?.("texto largo que envuelve el campo a varias filas seguidas");
+		for (const width of [30, 40, 46, 80, 120]) {
+			for (const [index, line] of rail.render(width).entries()) {
+				assert.ok(visibleWidth(line) <= width, `rail row ${index} paints ${visibleWidth(line)} cols at width ${width}: ${JSON.stringify(line)}`);
+			}
+			for (const [index, line] of compact.render(width).entries()) {
+				assert.ok(visibleWidth(line) <= width, `compact row ${index} paints ${visibleWidth(line)} cols at width ${width}: ${JSON.stringify(line)}`);
+			}
+		}
+		// The expanded compact list obeys the same contract.
+		compact.render(80);
+		compact.handleMouse?.(mouse("click", 12, 0, 80));
+		for (const [index, line] of compact.render(80).entries()) {
+			assert.ok(visibleWidth(line) <= 80, `expanded compact row ${index} paints ${visibleWidth(line)} cols: ${JSON.stringify(line)}`);
+		}
 	});
 
 	it("bounds the body viewport like the Todos panel and scrolls the overflow", async () => {

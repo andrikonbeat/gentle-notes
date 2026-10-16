@@ -296,6 +296,13 @@ export function renderPanelHeaderLine(card: PanelCard, theme: CardChromeTheme, w
 	return renderCardPanel(card, theme, width, { expanded: false });
 }
 
+/** The width a caller must render spliced panel rows at (cardLine and
+ * friends) so paintPanelRows' float margins bring them back to exactly the
+ * requested width: the rail deactivates itself if any line overflows. */
+export function panelBodyWidth(theme: CardChromeTheme, width: number, tone: CardTone = CARD_TONE.INFO): number {
+	return floatOpener(theme, tone, width) ? Math.floor(width) - FLOAT_MARGIN * 2 : Math.floor(width);
+}
+
 /** Rows a caller composes outside renderCardPanel — the rail's field block
  * — painted with the panel's tone background and margins when float applies,
  * so spliced rows read as part of the block. */
