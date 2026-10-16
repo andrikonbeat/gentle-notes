@@ -10,7 +10,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { NOTE_STATUS, addNote, clearNotes, emptyNotes, markSent, notesSummary, updateNoteText, type NotesState } from "./notes-state.ts";
 import { loadNotes, mutateNotes } from "./storage.ts";
 import { buildCompactNotesRow, buildNotesCard, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
-import { CARD_GLYPH, CARD_TONE, cardLine, paintPanelRows, panelBodyWidth, panelContentColumn, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
+import { CARD_GLYPH, CARD_TONE, paintPanelRows, panelBodyLine, panelBodyWidth, panelContentColumn, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
 import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
 
 
@@ -217,16 +217,16 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				bodyCache = lines.slice(headRows, lines.length - 1);
 				let editBlock: string[] | undefined;
 				if (editingId !== undefined && view.editSlot !== undefined) {
-					editBlock = paintPanelRows(editInput.render(inner).slice(1, -1).map((row) => cardLine(row, tone, cardTheme, bodyWidth)), cardTheme, width, tone);
+					editBlock = paintPanelRows(editInput.render(inner).slice(1, -1).map((row) => panelBodyLine(row, tone, cardTheme, width)), cardTheme, width, tone);
 					bodyCache.splice(view.editSlot, 0, ...editBlock);
 				}
 				// The card is the field's frame: the editor's own border rows
 				// drop out and its content rows dress in the panel background,
 				// so the wrapping field reads as part of the block.
-				const fieldContent = input.render(inner).slice(1, -1).map((row) => cardLine(row, tone, cardTheme, bodyWidth));
+				const fieldContent = input.render(inner).slice(1, -1).map((row) => panelBodyLine(row, tone, cardTheme, width));
 				if (input.getText().trim().length === 0 && !input.focused && fieldContent.length >= 1) {
 					// An empty, unfocused field paints its affordance instead of a blank.
-					fieldContent[0] = cardLine(cardTheme.fg("muted", "＋ Write a note…"), tone, cardTheme, bodyWidth);
+					fieldContent[0] = panelBodyLine(cardTheme.fg("muted", "＋ Write a note…"), tone, cardTheme, width);
 				}
 				const fieldRows = paintPanelRows(fieldContent, cardTheme, width, tone);
 				// Bounded like the Todos panel: at most one third of the screen,

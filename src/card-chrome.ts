@@ -303,6 +303,16 @@ export function panelBodyWidth(theme: CardChromeTheme, width: number, tone: Card
 	return floatOpener(theme, tone, width) ? Math.floor(width) - FLOAT_MARGIN * 2 : Math.floor(width);
 }
 
+/** A body row composed outside renderCardPanel, drawn in the active style's
+ * own chrome — the float panel's ▎ rail with its invisible right edge, or
+ * the outlined frame — so spliced rows (the wrapping field, the edit block)
+ * match the card that hosts them. Takes the panel's requested width and
+ * renders at the float body width; paintPanelRows completes the margins. */
+export function panelBodyLine(text: string, tone: CardTone, theme: CardChromeTheme, width: number): string {
+	const open = floatOpener(theme, tone, width);
+	return withChrome(open ? FLOAT_CHROME : OUTLINE_CHROME, () => cardLine(text, tone, theme, open ? Math.floor(width) - FLOAT_MARGIN * 2 : Math.floor(width)));
+}
+
 /** Rows a caller composes outside renderCardPanel — the rail's field block
  * — painted with the panel's tone background and margins when float applies,
  * so spliced rows read as part of the block. */

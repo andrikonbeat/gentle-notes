@@ -317,6 +317,8 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(lines[1]?.includes("0 pend · 0 sent"), "header carries the empty summary");
 		assert.ok(lines[3]?.includes("＋ Write a note…"), `the field paints its placeholder: ${lines[3]}`);
 		assert.ok(lines[3]?.includes("\x1b[48;5;22m"), "the field row carries the panel background");
+		assert.ok(lines[3]?.includes("▎"), "the field row carries the float rail");
+		assert.ok(!lines[3]?.includes("│"), `the field row adds no outline edges: ${JSON.stringify(lines[3])}`);
 		assert.ok(lines[4]?.includes("\x1b[48;5;22m"), "the panel paints the tone background");
 	});
 
@@ -354,6 +356,9 @@ describe("gentle-notes extension wiring", () => {
 		rail.handleInput?.("una nota larguisima que se extiende mucho mas alla de una sola fila visible");
 		const mid = rail.render(46);
 		assert.equal(mid.length, 6, `the card grows with the wrap: ${mid.length}`);
+		for (const [index, line] of mid.entries()) {
+			assert.ok(!line.includes("│"), `wrapped row ${index} adds no outline edges: ${JSON.stringify(line)}`);
+		}
 		rail.handleInput?.("\r");
 		await FLUSH();
 		assert.equal(loadNotes(project).notes[0]?.text, "una nota larguisima que se extiende mucho mas alla de una sola fila visible");
@@ -433,6 +438,7 @@ describe("gentle-notes extension wiring", () => {
 		assert.equal(harness.getFocus(), rail, "editing takes the keyboard focus");
 		const editing = rail.render(46).join("\n");
 		assert.ok(!editing.includes("➤"), "the edit row replaces the note row, glyph included");
+		assert.ok(!editing.includes("│"), "the edit block paints in the card's chrome");
 
 		rail.handleInput?.("s");
 		rail.handleInput?.("\r");
