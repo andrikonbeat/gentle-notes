@@ -9,7 +9,7 @@
 // Glyphs: pending ✉ (accent), sent ✓ (success, dim strikethrough), send
 // affordance ➤ (muted, accent while hovered, rail rows only).
 
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { NOTE_STATUS, notesSummary, type NoteTask, type NotesState, type NotesSummary } from "./notes-state.ts";
 import { CARD_TONE, panelExtraRows, panelFloatApplies, panelHeaderRow, panelInnerWidth, renderCardPanel, renderPanelHeaderLine, type PanelCard } from "./card-chrome.ts";
 
@@ -91,28 +91,40 @@ export function wrapNoteText(text: string, width: number): string[] {
  * touch the note text, and wrapped continuations align with its first column. */
 const GLYPH_GAP = 2;
 
+/** The single line a folded note keeps: its first wrapped line, ellipsized
+ * when the note goes on, so a folded list reads like a compact TODO. */
+function foldedText(first: string, rest: readonly string[], width: number): string {
+	return rest.length === 0 ? first : `${truncateToWidth(first, Math.max(1, width - 1), "")}…`;
+}
+
 /** Pending rail row: ✉ glyph, air, text padded to the right edge, air, ➤ send
  * affordance (accent while hovered, muted otherwise); wrapped continuations
  * indent to the text column. */
-export function pendingRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, hoveredId?: number): string[] {
+export function pendingRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, hoveredId?: number, folded = false): string[] {
 	const width = Math.max(1, inner - GLYPH_GAP * 2 - 2);
 	const segments = wrapNoteText(sanitizeNoteText(note.text), width);
 	const [first = "", ...rest] = segments;
 	const sendRole = hoveredId === note.id ? "accent" : "muted";
+	// Folded the note keeps one row: the first line, ellipsized when the note
+	// goes on, padded to the text column so the send glyph holds its place and
+	// the click target lands where the unfolded row had it.
+	const head = folded ? foldedText(first, rest, width).padEnd(width) : first.padEnd(width);
 	const lines = [
-		`${theme.fg("accent", NOTE_GLYPH.pending)}${" ".repeat(GLYPH_GAP)}${theme.fg("text", first.padEnd(width))}${" ".repeat(GLYPH_GAP)}${theme.fg(sendRole, SEND_GLYPH)}`,
+		`${theme.fg("accent", NOTE_GLYPH.pending)}${" ".repeat(GLYPH_GAP)}${theme.fg("text", head)}${" ".repeat(GLYPH_GAP)}${theme.fg(sendRole, SEND_GLYPH)}`,
 	];
+	if (folded) return lines;
 	for (const segment of rest) lines.push(`${" ".repeat(GLYPH_GAP + 1)}${theme.fg("text", segment)}`);
 	return lines;
 }
 
 /** Sent rail row: ✓ success glyph, air, and the note struck through, dim, per
  * line; continuations indent to the text column. */
-export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: number): string[] {
+export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, folded = false): string[] {
 	const width = Math.max(1, inner - GLYPH_GAP * 2 - 2);
 	const segments = wrapNoteText(sanitizeNoteText(note.text), width);
 	const [first = "", ...rest] = segments;
-	const lines = [`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("dim", theme.strikethrough(first))}`];
+	const lines = [`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("dim", theme.strikethrough(folded ? foldedText(first, rest, width) : first))}`];
+	if (folded) return lines;
 	for (const segment of rest) lines.push(`${" ".repeat(GLYPH_GAP + 1)}${theme.fg("dim", theme.strikethrough(segment))}`);
 	return lines;
 }
@@ -124,7 +136,8 @@ export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: numbe
  * state — callers hide the widget instead. Pass hiddenNoteId while that note
  * is being edited inline: its rows are skipped and editSlot reports the row
  * where its editor belongs. */
-export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number): NotesCardView {
+export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number, options: { folded?: boolean } = {}): NotesCardView {
+	const folded = options.folded === true;
 	const summary = notesSummary(state);
 	const pending = state.notes.filter((note) => note.status === NOTE_STATUS.PENDING);
 	const sent = state.notes.filter((note) => note.status === NOTE_STATUS.SENT);
@@ -137,11 +150,11 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 			return;
 		}
 		hits.push({ row: bodyRows.length, id: note.id });
-		bodyRows.push(...pendingRowLines(note, theme, inner, hoveredId));
+		bodyRows.push(...pendingRowLines(note, theme, inner, hoveredId, folded));
 	};
 	if (state.notes.length <= NOTES_ROW_CAP) {
 		for (const note of pending) pushPending(note);
-		for (const note of sent) bodyRows.push(...sentRowLines(note, theme, inner));
+		for (const note of sent) bodyRows.push(...sentRowLines(note, theme, inner, folded));
 	} else {
 		if (sent.length > 0) bodyRows.push(`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("muted", `${sent.length} sent`)}`);
 		const foldedRows = sent.length > 0 ? 1 : 0;
@@ -150,6 +163,33 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 		if (pending.length > room) bodyRows.push(theme.fg("muted", `… ${pending.length - room} more`));
 	}
 	return { bodyRows, hits, summary, ...(editSlot !== undefined ? { editSlot } : {}) };
+}
+
+/** The single body row a collapsed block shows: the first pending note (or the
+ * first sent one, struck), folded to one line; a muted placeholder when the
+ * notepad is empty. Informational: the collapsed block exposes no actions. */
+export function collapsedNoteRow(state: NotesState, theme: NotesCardTheme, inner: number): string[] {
+	const width = Math.max(1, inner - GLYPH_GAP * 2);
+	const note = state.notes.find((candidate) => candidate.status === NOTE_STATUS.PENDING)
+		?? state.notes.find((candidate) => candidate.status === NOTE_STATUS.SENT);
+	if (!note) return [theme.fg("muted", "No notes".padEnd(width))];
+	const [first = "", ...rest] = wrapNoteText(sanitizeNoteText(note.text), width);
+	const text = foldedText(first, rest, width);
+	if (note.status === NOTE_STATUS.SENT) return [`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("dim", theme.strikethrough(text))}`];
+	return [`${theme.fg("accent", NOTE_GLYPH.pending)}${" ".repeat(GLYPH_GAP)}${theme.fg("text", text)}`];
+}
+
+/** The two header controls in the Todos grammar: the chevron shows the current
+ * state, the label names what a click does, and the label is dropped when the
+ * header has no room for it. The texts double as the needles the click map
+ * looks up on the rendered header row (controlSpan). */
+export function railControlText(options: { collapsed: boolean; folded: boolean; labelFits: boolean }): { collapse: string; fold: string } {
+	const chevron = (open: boolean): string => (open ? "▾" : "▸");
+	const label = (text: string): string => (options.labelFits ? ` ${text}` : "");
+	return {
+		collapse: `${chevron(!options.collapsed)}${label(options.collapsed ? "Expand" : "Collapse")}`,
+		fold: `${chevron(!options.folded)}${label(options.folded ? "Unfold" : "Fold")}`,
+	};
 }
 
 const ANSI_OR_CONTROL = /^\x1b\[[0-9;?]*[A-Za-z]/;
@@ -178,6 +218,40 @@ export function sendGlyphColumn(line: string): number | undefined {
 		index += character.length;
 	}
 	return undefined;
+}
+
+/**
+ * Visible column span of a control needle inside a rendered row, skipping ANSI
+ * escapes and measuring in columns, so the click target stays correct in every
+ * card style. Searches from `from` so two identical chevrons (collapsed block,
+ * folded notes) can be told apart by order.
+ */
+export function controlSpan(line: string, needle: string, from = 0): { start: number; end: number } | undefined {
+	if (needle.length === 0) return undefined;
+	const cells: { ch: string; column: number; width: number }[] = [];
+	let index = 0;
+	let column = 0;
+	while (index < line.length) {
+		if (line[index] === "\x1b") {
+			const match = ANSI_OR_CONTROL.exec(line.slice(index));
+			if (match) {
+				index += match[0].length;
+				continue;
+			}
+		}
+		const codePoint = line.codePointAt(index) as number;
+		const character = String.fromCodePoint(codePoint);
+		const width = visibleWidth(character);
+		cells.push({ ch: character, column, width });
+		column += width;
+		index += character.length;
+	}
+	const plain = cells.map((cell) => cell.ch).join("");
+	const at = plain.indexOf(needle, from);
+	if (at < 0) return undefined;
+	const first = cells[at] as { column: number };
+	const last = cells[at + needle.length - 1] as { column: number; width: number };
+	return { start: first.column, end: last.column + last.width - 1 };
 }
 
 /** Width from which the compact control shows its label, mirroring the Todos. */

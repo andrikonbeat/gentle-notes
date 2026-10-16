@@ -7,6 +7,9 @@ import {
 	SEND_GLYPH,
 	buildNotesCard,
 	buildCompactNotesRow,
+	collapsedNoteRow,
+	controlSpan,
+	railControlText,
 	pendingRowLines,
 	sanitizeNoteText,
 	sendGlyphColumn,
@@ -41,6 +44,85 @@ function pendingNote(id: number, text: string): NoteTask {
 function sentNote(id: number, text: string): NoteTask {
 	return { id, text, status: NOTE_STATUS.SENT, createdAt: id, sentAt: id + 100 };
 }
+
+describe("folded rows (S8)", () => {
+	const inner = 40;
+	it("folds a long pending note to a single row with an ellipsis", () => {
+		const note = pendingNote(1, "una nota larguisima que se extiende mucho mas alla de una sola fila visible");
+		assert.ok(pendingRowLines(note, theme, inner).length > 1, "unfolded rows wrap");
+		const folded = pendingRowLines(note, theme, inner, undefined, true);
+		assert.equal(folded.length, 1, `folded pending rows: ${folded.length}`);
+		assert.ok(folded[0]!.includes("…"), `folded row marks the hidden text: ${folded[0]}`);
+		assert.ok(folded[0]!.includes(SEND_GLYPH), "the send affordance stays on the folded row");
+	});
+
+	it("keeps the send glyph column where the unfolded row had it", () => {
+		const note = pendingNote(2, "una nota larguisima que se extiende mucho mas alla de una sola fila visible");
+		const unfolded = pendingRowLines(note, theme, inner)[0]!;
+		const folded = pendingRowLines(note, theme, inner, undefined, true)[0]!;
+		assert.equal(sendGlyphColumn(folded), sendGlyphColumn(unfolded));
+	});
+
+	it("folds sent notes to one struck row and leaves short notes alone", () => {
+		const long = sentNote(3, "una nota enviada que ocupa bastante mas que una sola fila visible del bloque");
+		const short = sentNote(4, "corta");
+		assert.equal(sentRowLines(long, theme, inner, true).length, 1);
+		assert.ok(sentRowLines(long, theme, inner, true)[0]!.includes("~~"), "strikethrough survives folding");
+		assert.ok(sentRowLines(long, theme, inner, true)[0]!.includes("…"), "hidden text is marked");
+		assert.ok(!sentRowLines(short, theme, inner, true)[0]!.includes("…"), "a note that fits is not clipped");
+		assert.equal(sentRowLines(short, theme, inner, true)[0], sentRowLines(short, theme, inner)[0]);
+	});
+
+	it("buildNotesCard folds every note on request and keeps the hit map", () => {
+		const state = { notes: [pendingNote(1, "corta"), sentNote(2, "enviada corta")], nextId: 3 };
+		const plain = buildNotesCard(state, theme, inner);
+		const folded = buildNotesCard(state, theme, inner, undefined, undefined, { folded: true });
+		assert.equal(folded.bodyRows.length, plain.bodyRows.length, "one-row notes fold to the same rows");
+		const long = { notes: [pendingNote(1, "una nota larguisima que se extiende mucho mas alla de una sola fila")], nextId: 2 };
+		assert.ok(buildNotesCard(long, theme, inner).bodyRows.length > 1);
+		assert.equal(buildNotesCard(long, theme, inner, undefined, undefined, { folded: true }).bodyRows.length, 1);
+		assert.deepEqual(buildNotesCard(long, theme, inner, undefined, undefined, { folded: true }).hits, [{ row: 0, id: 1 }]);
+	});
+
+	it("shows the first pending note when the block collapses", () => {
+		const state = { notes: [sentNote(1, "enviada primero"), pendingNote(2, "pendiente larga que se pasa del ancho de una fila")], nextId: 3 };
+		const row = collapsedNoteRow(state, theme, inner);
+		assert.equal(row.length, 1, `collapsed body: ${row.length} rows`);
+		assert.ok(row[0]!.includes("pendiente larga"), `first pending note: ${row[0]}`);
+		assert.ok(!row[0]!.includes("enviada"), "the sent note stays out of the collapsed row");
+		assert.ok(row[0]!.includes("…"), "the collapsed row clips long text");
+	});
+
+	it("falls back to the sent note, then to a muted placeholder", () => {
+		const onlySent = { notes: [sentNote(1, "enviada corta")], nextId: 2 };
+		assert.ok(collapsedNoteRow(onlySent, theme, inner)[0]!.includes("~~"), "the sent fallback is struck");
+		const empty = collapsedNoteRow(emptyNotes(), theme, inner)[0]!;
+		assert.ok(empty.includes("<muted>"), `empty placeholder: ${empty}`);
+	});
+});
+
+describe("rail controls (S8)", () => {
+	it("names the action each click performs, with the state in the chevron", () => {
+		const idle = railControlText({ collapsed: false, folded: false, labelFits: true });
+		assert.deepEqual(idle, { collapse: "▾ Collapse", fold: "▾ Fold" });
+		const closed = railControlText({ collapsed: true, folded: true, labelFits: true });
+		assert.deepEqual(closed, { collapse: "▸ Expand", fold: "▸ Unfold" });
+	});
+
+	it("keeps the chevrons and drops the labels when the header is tight", () => {
+		const tight = railControlText({ collapsed: false, folded: false, labelFits: false });
+		assert.deepEqual(tight, { collapse: "▾", fold: "▾" });
+	});
+
+	it("finds each control's span on a rendered header, ANSI and all", () => {
+		const line = "\x1b[38;5;238m▎ \x1b[0m\x1b[38;5;114m✿ Notes \x1b[0m\x1b[38;5;114m▾ Collapse\x1b[0m \x1b[38;5;114m▾ Fold\x1b[0m";
+		assert.deepEqual(controlSpan(line, "▾ Collapse"), { start: 10, end: 19 });
+		assert.deepEqual(controlSpan(line, "▾ Fold"), { start: 21, end: 26 });
+		// Two identical chevrons: the search offset tells them apart by order.
+		assert.deepEqual(controlSpan(line, "▾", 11), { start: 21, end: 21 });
+		assert.equal(controlSpan(line, "Expand"), undefined);
+	});
+});
 
 describe("constants", () => {
 	it("pins the glyph grammar and the row cap", () => {
