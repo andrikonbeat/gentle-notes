@@ -328,6 +328,30 @@ describe("gentle-notes extension wiring", () => {
 		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.SENT);
 	});
 
+	it("scrolls the expanded compact list with the wheel (L26)", async () => {
+		await harness.sessionStart(project);
+		for (let id = 1; id <= 12; id++) await harness.runCommand(`add nota compacta numero ${id}`, project);
+		const widget = harness.buildWidget();
+		widget.render(80);
+		widget.handleMouse?.(mouse("click", 10, 1, 80));
+		const expanded = widget.render(80);
+		assert.ok(expanded.some((line) => line.includes("↑↓ 1–8/12")), `the hint reports the window: ${expanded.join(" | ")}`);
+
+		const wheel = widget.handleMouse?.(mouse("wheel", 30, 4, 80, 3));
+		assert.equal(wheel?.handled, true, "the wheel belongs to the overflowing list");
+		const scrolled = widget.render(80);
+		assert.ok(scrolled.some((line) => line.includes("↑↓ 4–11/12")), `the wheel advances the window: ${scrolled.join(" | ")}`);
+
+		const { row, column } = glyphRow(scrolled);
+		widget.handleMouse?.(mouse("click", column, row, 80));
+		await FLUSH();
+		assert.deepEqual(harness.sent, [{ content: "nota compacta numero 4", options: undefined }], "the rows on screen still send");
+
+		const wheelBack = widget.handleMouse?.(mouse("wheel", 30, 4, 80, -99));
+		assert.equal(wheelBack?.handled, true);
+		assert.ok(widget.render(80).some((line) => line.includes("↑↓ 1–8/12")), "the wheel clamps at the top");
+	});
+
 	it("paints the rail card by default, with the input row, even with no notes", async () => {
 		await harness.sessionStart(project);
 		harness.buildWidget();

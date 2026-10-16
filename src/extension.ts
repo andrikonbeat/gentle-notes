@@ -9,7 +9,7 @@ import { CURSOR_MARKER, Editor, ScrollView, truncateToWidth, visibleWidth } from
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { NOTE_STATUS, addNote, clearNotes, emptyNotes, markSent, notesSummary, updateNoteText, type NotesState } from "./notes-state.ts";
 import { loadNotes, mutateNotes } from "./storage.ts";
-import { buildCompactNotesRow, buildNotesCard, collapsedNoteRow, controlSpan, railControlText, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
+import { buildCompactNotesRow, buildNotesCard, collapsedNoteRow, COMPACT_ROW_CAP, controlSpan, railControlText, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
 import { CARD_GLYPH, CARD_TONE, paintPanelRows, panelBodyLine, panelBodyWidth, panelContentColumn, panelFloatApplies, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
 import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
 
@@ -500,7 +500,9 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		let collapsed = true;
 		let controlHovered = false;
 		let hoveredId: number | undefined;
-		let last: { rows: string[]; headerRow: number; control?: { start: number; end: number }; hits: NotesCardHit[] } | undefined;
+		// First visible row of the expanded list's window (L26).
+		let scrollTop = 0;
+		let last: { rows: string[]; headerRow: number; control?: { start: number; end: number }; hits: NotesCardHit[]; bodyTotal: number } | undefined;
 		/** The pending note at a rendered row, with its send glyph column. */
 		const rowHitAt = (y: number): { id: number; column: number | undefined } | undefined => {
 			const view = last;
@@ -516,7 +518,10 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					last = undefined;
 					return [];
 				}
-				last = buildCompactNotesRow(current, cardTheme, width, { collapsed, controlHovered, hoveredId });
+				last = buildCompactNotesRow(current, cardTheme, width, { collapsed, controlHovered, hoveredId, scrollTop });
+				// Keep the state where the render clamped it, so a shrunk backlog
+				// cannot leave the window past its end.
+				scrollTop = Math.max(0, Math.min(scrollTop, Math.max(0, last.bodyTotal - COMPACT_ROW_CAP)));
 				return last.rows;
 			},
 			handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
@@ -544,10 +549,19 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					}
 					return { handled: true, render: false };
 				}
+				if (event.type === "wheel") {
+					// Own the wheel while the expanded list overflows its window;
+					// otherwise the surrounding layout keeps scrolling its own viewport.
+					if (!collapsed && view.bodyTotal > COMPACT_ROW_CAP) {
+						scrollTop = Math.max(0, Math.min(scrollTop + (event.wheelDelta ?? 0), view.bodyTotal - COMPACT_ROW_CAP));
+						return { handled: true, render: true };
+					}
+					return {};
+				}
 				return {};
 			},
 			digest(): string {
-				return JSON.stringify([current, collapsed, controlHovered, hoveredId]);
+				return JSON.stringify([current, collapsed, controlHovered, hoveredId, scrollTop]);
 			},
 			invalidate(): void {},
 		};

@@ -389,13 +389,30 @@ describe("buildCompactNotesRow", () => {
 		assert.deepEqual(view.hits, [{ row: 4, id: 1 }, { row: 5, id: 3 }]);
 	});
 
-	it("expanded folds the list at the row cap", () => {
+	it("expanded windows the list at the row cap and reports it as a scroll range", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
 		let state = emptyNotes();
 		for (let id = 1; id <= 10; id++) state = unwrap(addNote(state, `nota ${id}`, id)).state;
 		const view = buildCompactNotesRow(state, floatTheme, 60, { collapsed: false });
+		assert.equal(view.bodyTotal, 10);
+		assert.equal(view.rows.filter((line) => line.includes("✉")).length, 8, `the window holds the cap: ${view.rows.join(" | ")}`);
+		assert.ok(view.rows.some((line) => line.includes("↑↓ 1–8/10")), `the hint reports the window: ${view.rows.join(" | ")}`);
+		assert.ok(!view.rows.some((line) => line.includes("… 2 more")), "the dead-end fold line is gone");
 		assert.equal(view.hits.length, 8);
-		assert.ok(view.rows.some((line) => line.includes("… 2 more")), `fold count paints: ${view.rows.join(" | ")}`);
+	});
+
+	it("scrolls the window with scrollTop, clamps it and remaps the hits on screen", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
+		let state = emptyNotes();
+		for (let id = 1; id <= 10; id++) state = unwrap(addNote(state, `nota ${id}`, id)).state;
+		const view = buildCompactNotesRow(state, floatTheme, 60, { collapsed: false, scrollTop: 2 });
+		assert.ok(view.rows.some((line) => line.includes("↑↓ 3–10/10")), `the hint follows the window: ${view.rows.join(" | ")}`);
+		assert.equal(view.hits.length, 8);
+		assert.deepEqual(view.hits[0], { row: 4, id: 3 });
+		assert.deepEqual(view.hits[7], { row: 11, id: 10 });
+		assert.ok(view.rows[4]?.includes("nota 3"), `the window starts at the scrolled note: ${view.rows[4]}`);
+		const clamped = buildCompactNotesRow(state, floatTheme, 60, { collapsed: false, scrollTop: 99 });
+		assert.ok(clamped.rows.some((line) => line.includes("↑↓ 3–10/10")), `scrollTop clamps to the last window: ${clamped.rows.join(" | ")}`);
 	});
 
 	it("outlined styles fall back to the collapsed panel without a hit span", () => {

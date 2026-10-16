@@ -11,7 +11,7 @@
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { NOTE_STATUS, notesSummary, type NoteTask, type NotesState, type NotesSummary } from "./notes-state.ts";
-import { CARD_TONE, panelExtraRows, panelFloatApplies, panelHeaderRow, panelInnerWidth, renderCardPanel, renderPanelHeaderLine, type PanelCard } from "./card-chrome.ts";
+import { CARD_TONE, panelBodyWidth, panelExtraRows, panelFloatApplies, panelHeaderRow, panelInnerWidth, paintPanelRows, renderCardPanel, renderPanelHeaderLine, type PanelCard } from "./card-chrome.ts";
 
 export const NOTE_GLYPH = {
 	pending: "✉",
@@ -263,8 +263,9 @@ export function controlSpan(line: string, needle: string, from = 0): { start: nu
 
 /** Width from which the compact control shows its label, mirroring the Todos. */
 const CONTROL_LABEL_WIDTH = 28;
-/** Note rows the expanded compact shows before folding the rest. */
-const COMPACT_ROW_CAP = 8;
+/** Note rows the expanded compact shows per window; the wheel scrolls the
+ * rest (L26). */
+export const COMPACT_ROW_CAP = 8;
 
 /** The expand/collapse control in the Todos grammar: chevron plus label while
  * the header has room, painted with the hover role while the pointer is on it
@@ -282,6 +283,8 @@ export interface CompactNotesView {
 	control?: { start: number; end: number };
 	/** Pending-note hit rows, in rendered coordinates. */
 	hits: NotesCardHit[];
+	/** Body rows behind the expanded window: the widget clamps its scroll with it. */
+	bodyTotal: number;
 }
 
 /** The compact notepad above the editor: one card-styled line — title, the
@@ -296,7 +299,7 @@ export function buildCompactNotesRow(
 	width: number,
 	options: { collapsed: boolean; controlHovered?: boolean; hoveredId?: number },
 ): CompactNotesView {
-	if (state.notes.length === 0) return { rows: [], headerRow: 0, hits: [] };
+	if (state.notes.length === 0) return { rows: [], headerRow: 0, hits: [], bodyTotal: 0 };
 	const summary = notesSummary(state);
 	const counts = `${summary.pending} pend · ${summary.sent} sent`;
 	// The control begins right after the rail mark, its air and the title word
@@ -321,21 +324,32 @@ export function buildCompactNotesRow(
 	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle: `${counts}${preview}`, body: [], tone: CARD_TONE.INFO, glyph: "" };
 	// The blank rows of air keep the widget off the chat input below and the
 	// Todos above; every hit-test index shifts with them.
-	const spaced = (rows: string[], headerRow: number, hits: NotesCardHit[]): CompactNotesView => ({
+	const spaced = (rows: string[], headerRow: number, hits: NotesCardHit[], bodyTotal: number): CompactNotesView => ({
 		rows: ["", ...rows, ""],
 		headerRow: headerRow + 1,
 		control: span,
 		hits: hits.map((hit) => ({ ...hit, row: hit.row + 1 })),
+		bodyTotal,
 	});
 	if (options.collapsed) {
-		return spaced(renderPanelHeaderLine(card, theme, width), 0, []);
+		return spaced(renderPanelHeaderLine(card, theme, width), 0, [], 0);
 	}
 	const view = buildNotesCard(state, theme, panelInnerWidth(theme, width), options.hoveredId);
-	const body = view.bodyRows.slice(0, COMPACT_ROW_CAP);
-	if (view.bodyRows.length > body.length) body.push(theme.fg("muted", `… ${view.bodyRows.length - body.length} more`));
-	const rows = renderCardPanel({ ...card, body }, theme, width, { expanded: true });
+	const total = view.bodyRows.length;
+	// The expanded list windows itself like the rail's body (L26): the wheel
+	// scrolls it and the hint reports the range, so a long backlog is
+	// reachable instead of dead-ending at "… N more".
+	const scrollTop = Math.max(0, Math.min(options.scrollTop ?? 0, Math.max(0, total - COMPACT_ROW_CAP)));
+	const visible = view.bodyRows.slice(scrollTop, scrollTop + COMPACT_ROW_CAP);
+	const rows = renderCardPanel({ ...card, body: visible }, theme, width, { expanded: true });
+	if (total > visible.length) {
+		rows.push(...paintPanelRows([theme.fg("muted", truncateToWidth(`↑↓ ${scrollTop + 1}–${scrollTop + visible.length}/${total}`, panelBodyWidth(theme, width)))], theme, width));
+	}
 	const headerRow = panelHeaderRow(theme, width);
 	// The float panel pads around its header; the outline frame does not.
 	const bodyStart = panelExtraRows(theme, width) + 1;
-	return spaced(rows, headerRow, view.hits.filter((hit) => hit.row < COMPACT_ROW_CAP).map((hit) => ({ ...hit, row: bodyStart + hit.row })));
+	const hits = view.hits
+		.filter((hit) => hit.row >= scrollTop && hit.row < scrollTop + visible.length)
+		.map((hit) => ({ ...hit, row: bodyStart + hit.row - scrollTop }));
+	return spaced(rows, headerRow, hits, total);
 }
