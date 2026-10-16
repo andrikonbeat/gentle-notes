@@ -26,8 +26,9 @@ const MANAGER_LIMIT = 20;
 const SEND_HIT_TOLERANCE = 1;
 /** Rail card hint shown in the header rule: the keyboard path. */
 const RAIL_HINT = "alt+n";
-/** Bounded body viewport cap, mirroring the Todos panel budget. */
-const RAIL_BODY_CAP = 16;
+/** Body viewport ceiling: the card grows down to half the terminal (L24)
+ * and never past this cap. */
+const RAIL_BODY_CAP = 24;
 
 const HELP = [
 	"Usage: /notes [add <text> | send [<id>] | list | clear | collapse | expand | fold | unfold]",
@@ -288,10 +289,11 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// The card is the field's frame: the editor's own border rows
 				// drop out and its content rows dress in the panel background,
 				// so the wrapping field reads as part of the block.
-				// Bounded like the Todos panel: at most one third of the screen,
-				// with the header, the editor and the rule outside the scroll.
+				// Bounded to half the screen (L24): the block grows down to read
+				// the notes, with the header, the editor and the rule outside the
+				// scroll; the smallest terminals keep the bounded behavior.
 				const terminalRows = (widgetTui?.terminal as unknown as { rows?: number } | undefined)?.rows ?? 48;
-				const height = Math.min(RAIL_BODY_CAP, Math.floor(terminalRows / 3));
+				const height = Math.min(RAIL_BODY_CAP, Math.floor(terminalRows / 2));
 				// The editor windows itself at 30% of the terminal — more rows
 				// than this card can hold — so the field takes its own window
 				// inside the budget and follows the cursor marker. Letting the

@@ -23,8 +23,11 @@ export type NoteStatusKey = keyof typeof NOTE_GLYPH;
 /** Hoverable send affordance drawn at the end of a pending rail row. */
 export const SEND_GLYPH = "➤";
 
-/** Above this many body rows the sent notes fold into one line (TODO grammar). */
-export const NOTES_ROW_CAP = 12;
+/** Above this many notes the body folds: sent notes collapse into "✓ N sent"
+ * and the pending tail into "… K more" (TODO grammar). Scaled to the taller
+ * rail card (L24): half the screen shows ~19 body rows, so the list folds at
+ * 18 instead of the Todos' 12. */
+export const NOTES_ROW_CAP = 18;
 
 export interface NotesCardTheme {
 	fg(role: string, text: string): string;

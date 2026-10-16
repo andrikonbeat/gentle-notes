@@ -395,7 +395,7 @@ describe("gentle-notes extension wiring", () => {
 		// itself around the cursor instead of pushing the card past the edge.
 		rail.handleInput?.(`PRINCIPIO ${"charla ".repeat(120)}MARCAFINAL`);
 		const output = rail.render(46);
-		const budget = Math.min(16, Math.floor(48 / 3));
+		const budget = Math.min(24, Math.floor(48 / 2));
 		assert.ok(output.length <= budget, `the card holds its own budget: ${output.length} > ${budget}`);
 		const markerRow = output.findIndex((line) => line.includes(CURSOR_MARKER));
 		assert.ok(markerRow >= 0, "the cursor marker stays in the card");
@@ -707,6 +707,18 @@ describe("gentle-notes extension wiring", () => {
 		const second = rail.render(46);
 		const hintAfter = second[second.length - 1] ?? "";
 		assert.ok(hintAfter.includes("↑↓ 2–2/6"), `scrolling advances the window: ${hintAfter}`);
+	});
+
+	it("grows the card down to half the terminal so more notes stay visible (L24)", async () => {
+		await harness.sessionStart(project);
+		for (let id = 1; id <= 15; id++) await harness.runCommand(`add nota visible ${id}`, project);
+		harness.buildWidget();
+		(harness.fakeTui.terminal as { rows?: number }).rows = 50;
+		const rail = harness.rail();
+		const lines = rail.render(46);
+		const visible = lines.filter((line) => line.includes("nota visible")).length;
+		assert.equal(visible, 15, `the taller card holds every note: ${visible} of 15`);
+		assert.ok(!lines.some((line) => line.includes("↑↓")), `no overflow hint while the notes fit: ${JSON.stringify(lines[lines.length - 1])}`);
 	});
 
 	it("sends a pending note through the keyboard manager", async () => {

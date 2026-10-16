@@ -140,7 +140,7 @@ describe("constants", () => {
 		assert.equal(NOTE_GLYPH.pending, "✉");
 		assert.equal(NOTE_GLYPH.sent, "✓");
 		assert.equal(SEND_GLYPH, "➤");
-		assert.equal(NOTES_ROW_CAP, 12);
+		assert.equal(NOTES_ROW_CAP, 18);
 	});
 });
 
@@ -242,17 +242,17 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 
 	it("folds long lists: sent summary first, capped pendings, overflow line", () => {
 		const notes: NoteTask[] = [];
-		for (let id = 1; id <= 15; id++) notes.push(pendingNote(id, `p${id}`));
-		for (let id = 16; id <= 18; id++) notes.push(sentNote(id, `s${id}`));
-		const state = { notes, nextId: 19 };
+		for (let id = 1; id <= 21; id++) notes.push(pendingNote(id, `p${id}`));
+		for (let id = 22; id <= 24; id++) notes.push(sentNote(id, `s${id}`));
+		const state = { notes, nextId: 25 };
 		const view = buildNotesCard(state, theme, 40);
-		assert.equal(view.bodyRows.length, 12);
+		assert.equal(view.bodyRows.length, 18);
 		assert.equal(view.bodyRows[0], `<success>✓</success>  <muted>3 sent</muted>`);
 		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"p1".padEnd(34)}</text>  <muted>➤</muted>`);
 		assert.equal(view.bodyRows[view.bodyRows.length - 1], `<muted>… 5 more</muted>`);
-		assert.equal(view.hits.length, 10);
+		assert.equal(view.hits.length, 16);
 		assert.deepEqual(view.hits[0], { row: 1, id: 1 });
-		assert.deepEqual(view.hits[9], { row: 10, id: 10 });
+		assert.deepEqual(view.hits[15], { row: 16, id: 16 });
 	});
 
 	it("advances hit rows past wrapped lines", () => {

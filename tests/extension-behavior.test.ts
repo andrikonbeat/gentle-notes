@@ -85,12 +85,12 @@ describe("buildNotesCard hits", () => {
 
 	it("only maps the pending notes that survive folding", () => {
 		const notes: NoteTask[] = [];
-		for (let id = 1; id <= 15; id++) notes.push(pendingNote(id, `p${id}`));
-		for (let id = 16; id <= 18; id++) notes.push(sentNote(id, `s${id}`));
-		const view = buildNotesCard({ notes, nextId: 19 }, theme, 40);
-		assert.equal(view.hits.length, 10);
+		for (let id = 1; id <= 21; id++) notes.push(pendingNote(id, `p${id}`));
+		for (let id = 22; id <= 24; id++) notes.push(sentNote(id, `s${id}`));
+		const view = buildNotesCard({ notes, nextId: 25 }, theme, 40);
+		assert.equal(view.hits.length, 16);
 		assert.deepEqual(view.hits[0], { row: 1, id: 1 });
-		assert.deepEqual(view.hits[9], { row: 10, id: 10 });
+		assert.deepEqual(view.hits[15], { row: 16, id: 16 });
 	});
 });
 
