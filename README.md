@@ -21,7 +21,7 @@ are ready — one click from the rail, or one pick from the manager dialog.
 |-------|----------|
 | Storage | One JSON file per project under `~/.pi/gentle-ai/notes/`, honoring `GENTLE_PI_CONFIG_HOME`. Atomic writes, serialized per file across concurrent sessions. |
 | Fullscreen sidebar | Paints as the `notes` rail section (below Todo) when gentle-shell supports it. Click the field to write (`Enter` saves, `Esc` returns to the chat), click a note's text to edit it inline, double click to fold it back to its first line, click `➤` to send, and drive the block from the header controls (`▾ Collapse` / `▾ Fold`). |
-| Regular mode | A one-row summary above the editor (`✉ Notes · N pend · M sent — "last note…"`), hidden while empty. |
+| Regular mode | One summary line above the editor with a blank line of air on each side: `Notes ▸ Expand  N pend · M sent — <the last note's first words>`, the preview clipped to the window. Hidden while empty. |
 | While the agent runs | The note is queued as a follow-up prompt (`deliverAs: "followUp"`), never interrupting the current turn. |
 | Keyboard path | Everything works without a mouse: `/notes add <text>`, `/notes send [<id>]`, `/notes list`, `/notes clear`, `/notes collapse|expand|fold|unfold`, or `alt+n` to pick a note to send. |
 | Statuses | Pending `✉` (accent) → sent `✓` (success, dim, struck through, same grammar as gentle-shell's Todo). Long lists fold into `✓ N sent`. |

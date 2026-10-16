@@ -281,10 +281,12 @@ export interface CompactNotesView {
 	hits: NotesCardHit[];
 }
 
-/** The compact notepad above the editor: one card-styled line — glyph with
- * its air, title, the expand/collapse control inline, summary trailing —
- * with the panel's tone background, like the Todos header. Expanded it
- * grows into the bounded note list with the same send glyphs as the rail. */
+/** The compact notepad above the editor: one card-styled line — title, the
+ * expand/collapse control inline, counts and the last note's first words —
+ * with the panel's tone background, like the Todos header, and a blank row
+ * of air above and below so the widget never reads as glued to the chat
+ * input or the Todos (L23). Expanded it grows into the bounded note list
+ * with the same send glyphs as the rail. */
 export function buildCompactNotesRow(
 	state: NotesState,
 	theme: NotesCardTheme,
@@ -293,21 +295,37 @@ export function buildCompactNotesRow(
 ): CompactNotesView {
 	if (state.notes.length === 0) return { rows: [], headerRow: 0, hits: [] };
 	const summary = notesSummary(state);
-	const subtitle = `${summary.pending} pend · ${summary.sent} sent`;
-	// The control begins right after the rail, the glyph and the title word —
-	// a fixed column in every style — and only hit-tests while the header
-	// fits the row without clipping.
-	const controlStart = 12;
-	const room = width - 2;
+	const counts = `${summary.pending} pend · ${summary.sent} sent`;
+	// The control begins right after the rail mark, its air and the title word
+	// — a fixed column in every style, two left of where the glyph put it —
+	// and stays hit-testable while the control itself fits, even when the
+	// counts and preview clip after it.
+	const controlStart = 10;
+	const inner = Math.floor(width) - 2;
 	const label = `${options.collapsed ? "▸" : "▾"} ${options.collapsed ? "Expand" : "Collapse"}`;
-	const labelFits = width >= CONTROL_LABEL_WIDTH && 13 + label.length + visibleWidth(subtitle) <= room;
+	const labelFits = width >= CONTROL_LABEL_WIDTH && controlStart + label.length + 2 + visibleWidth(counts) <= inner;
 	const control = expandControl(options.collapsed, options.controlHovered === true, theme, labelFits);
-	const span = panelFloatApplies(theme, width) && 13 + control.width + visibleWidth(subtitle) <= room
+	const span = panelFloatApplies(theme, width) && controlStart + control.width <= inner
 		? { start: controlStart, end: controlStart + control.width - 1 }
 		: undefined;
-	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle, body: [], tone: CARD_TONE.INFO, glyph: "✉ " };
+	// The last written note trails the counts, clipped to the room the header
+	// leaves after them: the preview grows with the window and never widens
+	// the row — the panel clips whatever is left over.
+	const summaryStart = controlStart + control.width + 2;
+	const previewRoom = inner - summaryStart - visibleWidth(counts);
+	const last = state.notes[state.notes.length - 1];
+	const preview = last && previewRoom >= 4 ? ` — ${truncateToWidth(sanitizeNoteText(last.text), previewRoom - 3, "…")}` : "";
+	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle: `${counts}${preview}`, body: [], tone: CARD_TONE.INFO, glyph: "" };
+	// The blank rows of air keep the widget off the chat input below and the
+	// Todos above; every hit-test index shifts with them.
+	const spaced = (rows: string[], headerRow: number, hits: NotesCardHit[]): CompactNotesView => ({
+		rows: ["", ...rows, ""],
+		headerRow: headerRow + 1,
+		control: span,
+		hits: hits.map((hit) => ({ ...hit, row: hit.row + 1 })),
+	});
 	if (options.collapsed) {
-		return { rows: renderPanelHeaderLine(card, theme, width), headerRow: 0, control: span, hits: [] };
+		return spaced(renderPanelHeaderLine(card, theme, width), 0, []);
 	}
 	const view = buildNotesCard(state, theme, panelInnerWidth(theme, width), options.hoveredId);
 	const body = view.bodyRows.slice(0, COMPACT_ROW_CAP);
@@ -316,10 +334,5 @@ export function buildCompactNotesRow(
 	const headerRow = panelHeaderRow(theme, width);
 	// The float panel pads around its header; the outline frame does not.
 	const bodyStart = panelExtraRows(theme, width) + 1;
-	return {
-		rows,
-		headerRow,
-		control: span,
-		hits: view.hits.filter((hit) => hit.row < COMPACT_ROW_CAP).map((hit) => ({ ...hit, row: bodyStart + hit.row })),
-	};
+	return spaced(rows, headerRow, view.hits.filter((hit) => hit.row < COMPACT_ROW_CAP).map((hit) => ({ ...hit, row: bodyStart + hit.row })));
 }

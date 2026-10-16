@@ -269,11 +269,16 @@ describe("gentle-notes extension wiring", () => {
 		await second.sessionStart(project);
 		const widget = second.buildWidget();
 		const lines = widget.render(80);
-		assert.equal(lines.length, 1);
-		assert.ok(lines[0]?.includes("Notes"), `compact line keeps the title: ${lines[0]}`);
-		assert.ok(lines[0]?.includes("1 pend"), `summary paints: ${lines[0]}`);
-		assert.ok(lines[0]?.includes("▸ Expand"), `control paints inline: ${lines[0]}`);
-		assert.ok(lines[0]?.includes("\x1b[48;5;22m"), "the compact line carries the panel background");
+		assert.equal(lines.length, 3, `a blank row of air above and below: ${lines.length}`);
+		assert.equal(lines[0], "");
+		assert.equal(lines[2], "");
+		const header = lines[1] ?? "";
+		assert.ok(header.includes("Notes"), `compact line keeps the title: ${header}`);
+		assert.ok(!header.includes("✉"), `the compact header drops the glyph: ${header}`);
+		assert.ok(header.includes("1 pend"), `summary paints: ${header}`);
+		assert.ok(header.includes("▸ Expand"), `control paints inline: ${header}`);
+		assert.ok(header.includes("— yapersistida"), `the last note previews after the counts: ${header}`);
+		assert.ok(header.includes("\x1b[48;5;22m"), "the compact line carries the panel background");
 	});
 
 	it("renders nothing in the compact row while the project has no notes", async () => {
@@ -286,15 +291,28 @@ describe("gentle-notes extension wiring", () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add compactable", project);
 		const widget = harness.buildWidget();
-		assert.equal(widget.render(80).length, 1);
-		const toggle = widget.handleMouse?.(mouse("click", 12, 0, 80));
+		assert.equal(widget.render(80).length, 3);
+		const toggle = widget.handleMouse?.(mouse("click", 10, 1, 80));
 		assert.equal(toggle?.handled, true);
 		const expanded = widget.render(80);
-		assert.ok(expanded.length > 1, "the compact row grows into the list");
-		assert.ok(expanded[1]?.includes("▾ Collapse"), `header carries the collapse control: ${expanded[1]}`);
+		assert.ok(expanded.length > 3, "the compact row grows into the list");
+		assert.equal(expanded[0], "");
+		assert.equal(expanded.at(-1), "");
+		assert.ok(expanded[2]?.includes("▾ Collapse"), `header carries the collapse control: ${expanded[2]}`);
 		assert.ok(expanded.join("\n").includes("compactable"), "the expanded list shows the note");
-		widget.handleMouse?.(mouse("click", 12, 1, 80));
-		assert.equal(widget.render(80).length, 1, "collapsing returns the single line");
+		widget.handleMouse?.(mouse("click", 10, 2, 80));
+		assert.equal(widget.render(80).length, 3, "collapsing returns the one-line summary with its air");
+	});
+
+	it("previews the last written note on the compact line (L23)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add primera de las notas", project);
+		const widget = harness.buildWidget();
+		assert.ok(widget.render(80)[1]?.includes("— primera de las notas"), "the preview shows the only note");
+		await harness.runCommand("add segunda y ultima escrita", project);
+		const line = widget.render(80)[1] ?? "";
+		assert.ok(line.includes("— segunda y ultima escrita"), `the preview follows the last note: ${line}`);
+		assert.ok(!line.includes("primera de las notas"), "the older note leaves the preview");
 	});
 
 	it("sends a note straight from the expanded compact list", async () => {
@@ -302,7 +320,7 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("add desde el compacto", project);
 		const widget = harness.buildWidget();
 		widget.render(80);
-		widget.handleMouse?.(mouse("click", 12, 0, 80));
+		widget.handleMouse?.(mouse("click", 10, 1, 80));
 		const { row, column } = glyphRow(widget.render(80));
 		widget.handleMouse?.(mouse("click", column, row, 80));
 		await FLUSH();
@@ -667,7 +685,7 @@ describe("gentle-notes extension wiring", () => {
 		}
 		// The expanded compact list obeys the same contract.
 		compact.render(80);
-		compact.handleMouse?.(mouse("click", 12, 0, 80));
+		compact.handleMouse?.(mouse("click", 10, 1, 80));
 		for (const [index, line] of compact.render(80).entries()) {
 			assert.ok(visibleWidth(line) <= 80, `expanded compact row ${index} paints ${visibleWidth(line)} cols: ${JSON.stringify(line)}`);
 		}
@@ -741,11 +759,11 @@ describe("gentle-notes extension wiring", () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add oculta esto", project);
 		const widget = harness.buildWidget();
-		assert.equal(widget.render(80).length, 1);
+		assert.equal(widget.render(80).length, 3);
 		sidebarState(harness.fakeTui).visibility = { notes: false };
 		assert.deepEqual(widget.render(80), []);
 		sidebarState(harness.fakeTui).visibility = { notes: true };
-		assert.equal(widget.render(80).length, 1);
+		assert.equal(widget.render(80).length, 3);
 	});
 
 	it("uninstalls the widget on session shutdown", async () => {
