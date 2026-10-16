@@ -597,6 +597,21 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(after.some((line) => line.includes("segunda nota que tambien pasa")), "the other note keeps its full text");
 	});
 
+	it("owns press events so the TUI selection layer cannot select card text (L22)", async () => {
+		await harness.sessionStart(project);
+		const long = "una nota larguisima que se extiende mucho mas alla de una sola fila visible del bloque";
+		await harness.runCommand(`add ${long}`, project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		// pi-tui's alt screen starts a text selection wherever a press goes
+		// unhandled, and on the second press of a double click it selects the
+		// word under the pointer and copy-on-selects it — the release then stops
+		// being a click and the fold never fires. The card must consume presses.
+		const press = rail.handleMouse?.(mouse("press", column - 6, row, 46));
+		assert.deepEqual(press, { handled: true, render: false }, `the card consumes the press: ${JSON.stringify(press)}`);
+	});
+
 	it("cancels the inline edit with Escape and keeps the note unchanged", async () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add dejar igual", project);

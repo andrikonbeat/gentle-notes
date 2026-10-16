@@ -363,6 +363,14 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 			handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
 				const last = lastRender;
 				const inside = (span: { start: number; end: number } | undefined, x: number): boolean => span !== undefined && x >= span.start && x <= span.end;
+				// pi-tui's alt screen starts a text selection wherever a press goes
+				// unhandled: the second press of a double click over a word selects
+				// the word, copy-on-selects it, and the release stops being a click —
+				// so the fold never fires and the clipboard walks away with the
+				// word (L22). The card is an interactive surface, so it owns its
+				// presses; the TUI still routes the release's click back here with
+				// its consecutive-click count.
+				if (event.type === "press") return { handled: true, render: false };
 				if (event.type === "move" || event.type === "drag") {
 					// The header row carries the two view controls: pointing at
 					// one paints the shared hover role, and the rest of the card
