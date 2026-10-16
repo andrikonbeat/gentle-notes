@@ -4,13 +4,13 @@
 // fullscreen sidebar (with a clickable send glyph per pending row) and a
 // compact summary row above the editor in regular mode. All interactions have
 // a keyboard path: the /notes command and the alt+n manager dialog.
-import type { Component, KeyId, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { Input, ScrollView, truncateToWidth } from "@earendil-works/pi-tui";
+import type { Component, EditorTheme, KeyId, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { Editor, ScrollView, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { NOTE_STATUS, addNote, clearNotes, emptyNotes, markSent, notesSummary, updateNoteText, type NotesState } from "./notes-state.ts";
 import { loadNotes, mutateNotes } from "./storage.ts";
-import { buildNotesCard, notesSummaryRow, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
-import { CARD_GLYPH, CARD_TONE, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
+import { buildCompactNotesRow, buildNotesCard, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
+import { CARD_GLYPH, CARD_TONE, cardLine, paintPanelRows, panelContentColumn, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
 import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
 
 const WIDGET_KEY = "gentle-notes";
@@ -128,62 +128,50 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		await apply(clearNotes, "Notes cleared");
 	};
 
-	/** The rail notepad: gentle-shell's card chrome (Status/Todos look,
-	 * byte-pinned by golden fixtures), always visible with its own input row.
+	/** The rail notepad: gentle-shell's card chrome (Status/Todos look, byte-
+	 * pinned by golden fixtures), always visible with its own wrapping editor.
 	 * Clicking the field takes the TUI keyboard focus — imperative setFocus,
 	 * because the rail's declarative focus path would focus its ScrollView —
-	 * typing flows through handleInput into pi-tui's Input, Enter saves the
-	 * note and keeps the field ready for the next one, Escape returns the
-	 * keyboard to the chat editor, clicking a pending note's text edits it
-	 * inline, and the send glyph per row is hit-tested off the rendered line.
-	 * Digest covers snapshot, hover, scroll, focus and both field values. */
+	 * and the click position reaches the editor so the caret lands where the
+	 * pointer is. Typing flows through handleInput into pi-tui's Editor: the
+	 * text wraps to following lines like a paragraph while writing, with the
+	 * editor's own frame and scroll indicator; Enter saves the note and keeps
+	 * the field ready, and Escape hands the keyboard back to the chat editor.
+	 * Clicking a pending note's text edits it inline in a second editor; the
+	 * send glyph per row is hit-tested off the rendered line. Digest covers
+	 * snapshot, hover, scroll, focus, both fields' text and a keystroke tick
+	 * so cursor moves always re-render. */
 	const makeRailCard = (theme: Theme): Component & { digest?(): string; focused: boolean; handleInput?(data: string): void } => {
 		const cardTheme = theme as unknown as CardChromeTheme & NotesCardTheme;
+		const editorTheme = { borderColor: (text: string) => cardTheme.fg("border", text), selectList: {} } as unknown as EditorTheme;
 		let hoveredId: number | undefined;
 		let editingId: number | undefined;
-		const input = new Input({
-			prompt: "＋ ",
-			placeholder: "Write a note…",
-			placeholderStyle: (text: string) => cardTheme.fg("muted", text),
-		});
-		const editInput = new Input({
-			prompt: "✎ ",
-			placeholder: "Edit the note…",
-			placeholderStyle: (text: string) => cardTheme.fg("muted", text),
-		});
-		input.onSubmit = (value) => {
-			if (value.trim().length > 0) void saveNote(value);
-			input.setValue("");
+		const input = new Editor(widgetTui as TUI, editorTheme);
+		const editInput = new Editor(widgetTui as TUI, editorTheme);
+		input.onSubmit = (text) => {
+			if (text.trim().length > 0) void saveNote(text);
+			input.setText("");
 		};
-		input.onEscape = () => {
-			widgetTui?.setFocus(null);
-			refresh();
-		};
-		editInput.onSubmit = (value) => {
-			void commitEdit(value);
-		};
-		editInput.onEscape = () => {
-			editingId = undefined;
-			widgetTui?.setFocus(null);
-			refresh();
+		editInput.onSubmit = (text) => {
+			void commitEdit(text);
 		};
 		// Widgets are measured as leaves, so the note body needs its own
-		// viewport, exactly like the Todos panel: the header, the input row
-		// and the closing rule stay outside the scroll.
+		// viewport, exactly like the Todos panel: the header, the editor and
+		// the closing rule stay outside the scroll.
 		const scroll = new ScrollView({ render: () => bodyCache, invalidate() {} }, { follow: "none", overscroll: "contain" });
 		let bodyCache: string[] = [];
 		let inputTick = 0;
-		let lastRender: { output: string[]; headRows: number; notesStart: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
+		let lastRender: { output: string[]; headRows: number; editorRows: number; notesStart: number; contentColumn: number; editStart: number | undefined; editRows: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
 
-		const commitEdit = async (value: string): Promise<void> => {
+		const commitEdit = async (text: string): Promise<void> => {
 			const id = editingId;
 			editingId = undefined;
 			widgetTui?.setFocus(null);
-			if (id === undefined || value.trim().length === 0) {
+			if (id === undefined || text.trim().length === 0) {
 				refresh();
 				return;
 			}
-			await apply((state) => updateNoteText(state, id, value), `Note #${id} updated`);
+			await apply((state) => updateNoteText(state, id, text), `Note #${id} updated`);
 		};
 
 		/** The pending note shown at row y, with its rendered line and the
@@ -212,33 +200,67 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				input.focused = self.focused && editingId === undefined;
 				editInput.focused = self.focused && editingId !== undefined;
 				const view = buildNotesCard(current, cardTheme, inner, hoveredId, editingId);
-				const noteRows = [...view.bodyRows];
-				if (editingId !== undefined && view.editSlot !== undefined) noteRows.splice(view.editSlot, 0, editInput.render(inner)[0] ?? "");
+				// The panel frames only the note rows; both editors draw their
+				// own frames, so their rows splice in raw around the scroll.
 				const lines = renderCardPanel(
-					{ title: "Notes", subtitle: `${view.summary.pending} pend · ${view.summary.sent} sent`, body: [input.render(inner)[0] ?? "", ...noteRows], tone, glyph: CARD_GLYPH },
+					{ title: "Notes", subtitle: `${view.summary.pending} pend · ${view.summary.sent} sent`, body: view.bodyRows, tone, glyph: CARD_GLYPH },
 					cardTheme,
 					width,
 					{ expanded: true, hint: RAIL_HINT },
 				);
 				const headRows = headerRow === 1 ? 3 : 1;
-				const notesStart = headRows + 1;
-				const inputRow = lines[headRows] ?? "";
-				bodyCache = lines.slice(notesStart, lines.length - 1);
+				bodyCache = lines.slice(headRows, lines.length - 1);
+				let editBlock: string[] | undefined;
+				if (editingId !== undefined && view.editSlot !== undefined) {
+					editBlock = paintPanelRows(editInput.render(inner).slice(1, -1).map((row) => cardLine(row, tone, cardTheme, width)), cardTheme, width, tone);
+					bodyCache.splice(view.editSlot, 0, ...editBlock);
+				}
+				// The card is the field's frame: the editor's own border rows
+				// drop out and its content rows dress in the panel background,
+				// so the wrapping field reads as part of the block.
+				const fieldContent = input.render(inner).slice(1, -1).map((row) => cardLine(row, tone, cardTheme, width));
+				if (input.getText().trim().length === 0 && !input.focused && fieldContent.length >= 1) {
+					// An empty, unfocused field paints its affordance instead of a blank.
+					fieldContent[0] = cardLine(cardTheme.fg("muted", "＋ Write a note…"), tone, cardTheme, width);
+				}
+				const fieldRows = paintPanelRows(fieldContent, cardTheme, width, tone);
 				// Bounded like the Todos panel: at most one third of the screen,
-				// with the header, the input row and the rule outside the scroll.
+				// with the header, the editor and the rule outside the scroll.
 				const terminalRows = (widgetTui?.terminal as unknown as { rows?: number } | undefined)?.rows ?? 48;
 				const height = Math.min(RAIL_BODY_CAP, Math.floor(terminalRows / 3));
-				const overflow = headRows + 1 + bodyCache.length + 1 > height;
-				const room = Math.max(1, height - headRows - 1 - 1 - Number(overflow));
+				const overflow = headRows + fieldRows.length + bodyCache.length + 1 > height;
+				const room = Math.max(1, height - headRows - fieldRows.length - 1 - Number(overflow));
 				scroll.updateLayout(bodyCache.length, room, () => widgetTui?.requestRender());
 				const visible = scroll.render(width).slice(scroll.scrollTop, scroll.scrollTop + scroll.viewportHeight);
-				const output = [...lines.slice(0, headRows), inputRow, ...visible, ...lines.slice(lines.length - 1)];
+				const notesStart = headRows + fieldRows.length;
+				const output = [...lines.slice(0, headRows), ...fieldRows, ...visible, ...lines.slice(lines.length - 1)];
 				if (overflow) output.push(cardTheme.fg("muted", truncateToWidth(`↑↓ ${scroll.scrollTop + 1}–${scroll.scrollTop + visible.length}/${bodyCache.length}`, width)));
-				lastRender = { output, headRows, notesStart, visibleRows: visible.length, scrollTop: scroll.scrollTop, hits: view.hits };
+				lastRender = {
+					output,
+					headRows,
+					editorRows: fieldRows.length,
+					contentColumn: panelContentColumn(cardTheme, width, tone),
+					notesStart,
+					editStart: editBlock !== undefined && view.editSlot !== undefined && view.editSlot >= scroll.scrollTop
+						? notesStart + (view.editSlot - scroll.scrollTop)
+						: undefined,
+					editRows: editBlock?.length ?? 0,
+					visibleRows: visible.length,
+					scrollTop: scroll.scrollTop,
+					hits: view.hits,
+				};
 				return output;
 			},
 			handleInput(data: string): void {
 				if (!self.focused) return;
+				// Bare Escape hands the keyboard back to the chat editor and
+				// cancels any inline edit; every other key flows into the field.
+				if (data === "\x1b") {
+					editingId = undefined;
+					widgetTui?.setFocus(null);
+					refresh();
+					return;
+				}
 				// The tick re-renders even on non-mutating keys (arrows), so the
 				// cursor marker always rides the last keystroke.
 				inputTick++;
@@ -246,6 +268,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				else input.handleInput(data);
 			},
 			handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
+				const last = lastRender;
 				if (event.type === "move" || event.type === "drag") {
 					const found = rowHitAt(event.y);
 					const next = found && found.column !== undefined && Math.abs(event.x - found.column) <= SEND_HIT_TOLERANCE ? found.id : undefined;
@@ -254,11 +277,20 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					return { handled: true, render: true };
 				}
 				if (event.type === "click") {
-					const last = lastRender;
-					// The input row owns the keyboard: clicking it takes focus.
-					if (last && event.y === last.headRows) {
+					if (!last) return {};
+					// The editor block owns the keyboard: clicking it takes
+					// focus and positions the caret where the pointer is.
+					if (event.y >= last.headRows && event.y < last.notesStart) {
 						editingId = undefined;
 						widgetTui?.setFocus(self);
+						// Coordinates shift into the editor's own frame: the top
+						// border row the card strips, and the panel's side rail.
+						input.handleMouse({ ...event, y: event.y - last.headRows + 1, x: Math.max(0, event.x - last.contentColumn) });
+						return { handled: true, render: true };
+					}
+					if (last.editStart !== undefined && event.y >= last.editStart && event.y < last.editStart + last.editRows) {
+						widgetTui?.setFocus(self);
+						editInput.handleMouse({ ...event, y: event.y - last.editStart + 1, x: Math.max(0, event.x - last.contentColumn) });
 						return { handled: true, render: true };
 					}
 					const found = rowHitAt(event.y);
@@ -270,7 +302,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					// A click on the text of a pending note edits it inline; the
 					// cursor rides to the end of the existing text for natural typing.
 					editingId = found.id;
-					editInput.setValue(found.text);
+					editInput.setText(found.text);
 					editInput.handleInput("\x1b[F");
 					widgetTui?.setFocus(self);
 					return { handled: true, render: true };
@@ -278,7 +310,6 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				if (event.type === "wheel") {
 					// Own the wheel only while the body overflows; otherwise the
 					// surrounding rail keeps scrolling its own viewport.
-					const last = lastRender;
 					if (last && last.visibleRows < bodyCache.length) {
 						scroll.scrollBy(event.wheelDelta ?? 0);
 						return { handled: true, render: true };
@@ -287,20 +318,73 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				return {};
 			},
 			digest(): string {
-				return JSON.stringify([current, hoveredId, scroll.scrollTop, self.focused, editingId, inputTick, input.getValue(), editInput.getValue()]);
+				return JSON.stringify([current, hoveredId, scroll.scrollTop, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
 			},
-			invalidate(): void {},
+			invalidate(): void {
+				input.invalidate();
+				editInput.invalidate();
+			},
 			dispose(): void {},
 		};
 		return self;
 	};
-	/** Compact one-row widget for regular mode; paints nothing while empty. */
-	const makeCompactRow = (theme: Theme): Component => {
+	/** Compact widget for regular mode: one card-styled line — glyph, title,
+	 * expand/collapse control inline, summary — with the panel background like
+	 * the Todos header; expanded it grows into the bounded note list. Paints
+	 * nothing while empty. */
+	const makeCompactRow = (theme: Theme): Component & { digest?(): string } => {
 		const cardTheme = theme as unknown as NotesCardTheme;
+		let collapsed = true;
+		let controlHovered = false;
+		let hoveredId: number | undefined;
+		let last: { rows: string[]; headerRow: number; control?: { start: number; end: number }; hits: NotesCardHit[] } | undefined;
+		/** The pending note at a rendered row, with its send glyph column. */
+		const rowHitAt = (y: number): { id: number; column: number | undefined } | undefined => {
+			const view = last;
+			if (!view) return undefined;
+			const hit = view.hits.find((candidate) => candidate.row === y);
+			if (!hit) return undefined;
+			const line = view.rows[y];
+			return line !== undefined ? { id: hit.id, column: sendGlyphColumn(line) } : undefined;
+		};
 		return {
 			render(width: number): string[] {
-				if (current.notes.length === 0) return [];
-				return [notesSummaryRow(current, cardTheme, width)];
+				if (current.notes.length === 0) {
+					last = undefined;
+					return [];
+				}
+				last = buildCompactNotesRow(current, cardTheme, width, { collapsed, controlHovered, hoveredId });
+				return last.rows;
+			},
+			handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
+				const view = last;
+				if (!view) return {};
+				const onControl = view.control !== undefined && event.y === view.headerRow && event.x >= view.control.start && event.x <= view.control.end;
+				if (event.type === "move" || event.type === "drag") {
+					const found = onControl ? undefined : rowHitAt(event.y);
+					const nextGlyph = found && found.column !== undefined && Math.abs(event.x - found.column) <= SEND_HIT_TOLERANCE ? found.id : undefined;
+					if (onControl === controlHovered && nextGlyph === hoveredId) return { handled: true, render: false };
+					controlHovered = onControl;
+					hoveredId = nextGlyph;
+					return { handled: true, render: true };
+				}
+				if (event.type === "click") {
+					if (onControl) {
+						collapsed = !collapsed;
+						hoveredId = undefined;
+						return { handled: true, render: true };
+					}
+					const found = rowHitAt(event.y);
+					if (found && found.column !== undefined && Math.abs(event.x - found.column) <= SEND_HIT_TOLERANCE) {
+						void sendNote(found.id);
+						return { handled: true, render: true };
+					}
+					return { handled: true, render: false };
+				}
+				return {};
+			},
+			digest(): string {
+				return JSON.stringify([current, collapsed, controlHovered, hoveredId]);
 			},
 			invalidate(): void {},
 		};

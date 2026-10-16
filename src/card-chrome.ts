@@ -271,3 +271,35 @@ export function renderCardPanel(card: PanelCard, theme: CardChromeTheme, width: 
 	const bottom = cardBottom(card.tone, theme, width);
 	return [top, ...cardText(card, theme, cardInnerWidth(width), options.expanded).map((line) => cardLine(line, card.tone, theme, width)), bottom];
 }
+
+/** Whether the float style paints this width: callers that branch their
+ * geometry on the active card style use it. */
+export function panelFloatApplies(theme: CardChromeTheme, width: number, tone: CardTone = CARD_TONE.INFO): boolean {
+	return floatOpener(theme, tone, width) !== "";
+}
+
+/** The visible column where panel body content starts, in component
+ * coordinates: side rail plus its padding, plus the float margin when
+ * active. Callers forward mouse clicks into pre-rendered rows with it. */
+export function panelContentColumn(theme: CardChromeTheme, width: number, tone: CardTone = CARD_TONE.INFO): number {
+	return floatOpener(theme, tone, width) ? FLOAT_MARGIN + 2 : 2;
+}
+
+/** The panel header as a standalone one-row block, in the active style: the
+ * compact sections paint it above the editor, tone background and all. The
+ * outlined frame cannot carry one bare row, so it falls back to the whole
+ * collapsed panel. */
+export function renderPanelHeaderLine(card: PanelCard, theme: CardChromeTheme, width: number, hint?: string): string[] {
+	if (width <= 0) return [];
+	const open = floatOpener(theme, card.tone, width);
+	if (open) return paintFloat(withChrome(FLOAT_CHROME, () => [panelHeader(card, theme, Math.floor(width) - FLOAT_MARGIN * 2, hint)]), open);
+	return renderCardPanel(card, theme, width, { expanded: false });
+}
+
+/** Rows a caller composes outside renderCardPanel — the rail's field block
+ * — painted with the panel's tone background and margins when float applies,
+ * so spliced rows read as part of the block. */
+export function paintPanelRows(rows: readonly string[], theme: CardChromeTheme, width: number, tone: CardTone = CARD_TONE.INFO): string[] {
+	const open = floatOpener(theme, tone, width);
+	return open ? paintFloat(rows, open) : rows;
+}

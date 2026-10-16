@@ -266,7 +266,10 @@ describe("gentle-notes extension wiring", () => {
 		const widget = second.buildWidget();
 		const lines = widget.render(80);
 		assert.equal(lines.length, 1);
-		assert.ok(lines[0]?.includes("yapersistida"), `summary row shows the note: ${lines[0]}`);
+		assert.ok(lines[0]?.includes("Notes"), `compact line keeps the title: ${lines[0]}`);
+		assert.ok(lines[0]?.includes("1 pend"), `summary paints: ${lines[0]}`);
+		assert.ok(lines[0]?.includes("▸ Expand"), `control paints inline: ${lines[0]}`);
+		assert.ok(lines[0]?.includes("\x1b[48;5;22m"), "the compact line carries the panel background");
 	});
 
 	it("renders nothing in the compact row while the project has no notes", async () => {
@@ -275,15 +278,44 @@ describe("gentle-notes extension wiring", () => {
 		assert.deepEqual(widget.render(80), []);
 	});
 
+	it("expands the compact row from its inline control and collapses it back", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add compactable", project);
+		const widget = harness.buildWidget();
+		assert.equal(widget.render(80).length, 1);
+		const toggle = widget.handleMouse?.(mouse("click", 12, 0, 80));
+		assert.equal(toggle?.handled, true);
+		const expanded = widget.render(80);
+		assert.ok(expanded.length > 1, "the compact row grows into the list");
+		assert.ok(expanded[1]?.includes("▾ Collapse"), `header carries the collapse control: ${expanded[1]}`);
+		assert.ok(expanded.join("\n").includes("compactable"), "the expanded list shows the note");
+		widget.handleMouse?.(mouse("click", 12, 1, 80));
+		assert.equal(widget.render(80).length, 1, "collapsing returns the single line");
+	});
+
+	it("sends a note straight from the expanded compact list", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add desde el compacto", project);
+		const widget = harness.buildWidget();
+		widget.render(80);
+		widget.handleMouse?.(mouse("click", 12, 0, 80));
+		const { row, column } = glyphRow(widget.render(80));
+		widget.handleMouse?.(mouse("click", column, row, 80));
+		await FLUSH();
+		assert.deepEqual(harness.sent, [{ content: "desde el compacto", options: undefined }]);
+		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.SENT);
+	});
+
 	it("paints the rail card by default, with the input row, even with no notes", async () => {
 		await harness.sessionStart(project);
 		harness.buildWidget();
 		const lines = harness.rail().render(46);
-		// Float chrome: padding, header, padding, input row, closing rule.
+		// Float chrome: padding, header, padding, the field row, closing padding.
 		assert.equal(lines.length, 5);
 		assert.ok(lines[1]?.includes("✿ Notes"), `header carries the card glyph and title: ${lines[1]}`);
 		assert.ok(lines[1]?.includes("0 pend · 0 sent"), "header carries the empty summary");
-		assert.ok(lines[3]?.includes("＋") && lines[3]?.includes("rite a note…"), `the input row paints its placeholder: ${lines[3]}`);
+		assert.ok(lines[3]?.includes("＋ Write a note…"), `the field paints its placeholder: ${lines[3]}`);
+		assert.ok(lines[3]?.includes("\x1b[48;5;22m"), "the field row carries the panel background");
 		assert.ok(lines[4]?.includes("\x1b[48;5;22m"), "the panel paints the tone background");
 	});
 
@@ -303,10 +335,27 @@ describe("gentle-notes extension wiring", () => {
 		await FLUSH();
 		assert.deepEqual(loadNotes(project).notes.map((note) => note.text), ["una nota rapida"]);
 
-		// The field clears itself and keeps the focus for the next note.
+		// The field clears itself — the note moves to the list — and keeps
+		// the focus for the next one: the caret stays, the placeholder does
+		// not return until the field blurs.
 		const after = rail.render(46).join("\n");
-		assert.ok(after.includes("rite a note…"), "the placeholder returns after saving");
+		assert.ok(after.includes("una nota rapida"), "the saved note paints in the list");
+		assert.ok(!after.includes("＋ Write a note…"), "the placeholder waits for the blur");
 		assert.equal(rail.focused, true, "focus stays for rapid capture");
+	});
+
+	it("wraps a long capture into following field rows before saving", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		rail.handleInput?.("una nota larguisima que se extiende mucho mas alla de una sola fila visible");
+		const mid = rail.render(46);
+		assert.equal(mid.length, 6, `the card grows with the wrap: ${mid.length}`);
+		rail.handleInput?.("\r");
+		await FLUSH();
+		assert.equal(loadNotes(project).notes[0]?.text, "una nota larguisima que se extiende mucho mas alla de una sola fila visible");
 	});
 
 	it("returns the keyboard to the chat on Escape", async () => {

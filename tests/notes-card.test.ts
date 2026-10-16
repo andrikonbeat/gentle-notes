@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import { NOTE_STATUS, addNote, emptyNotes, markSent, type NoteTask } from "../src/notes-state.ts";
 import {
 	NOTES_ROW_CAP,
 	NOTE_GLYPH,
 	SEND_GLYPH,
 	buildNotesCard,
-	notesSummaryRow,
+	buildCompactNotesRow,
 	pendingRowLines,
 	sanitizeNoteText,
 	sendGlyphColumn,
@@ -20,6 +20,14 @@ const theme: NotesCardTheme = {
 	fg: (role, text) => `<${role}>${text}</${role}>`,
 	strikethrough: (text) => `~~${text}~~`,
 };
+
+const STYLE_SLOT = Symbol.for("gentle-pi.card-style");
+const previousStyle = (globalThis as Record<symbol, unknown>)[STYLE_SLOT];
+
+afterEach(() => {
+	if (previousStyle === undefined) delete (globalThis as Record<symbol, unknown>)[STYLE_SLOT];
+	else (globalThis as Record<symbol, unknown>)[STYLE_SLOT] = previousStyle;
+});
 
 function unwrap<V>(result: V | string): V {
 	if (typeof result === "string") throw new Error(result);
@@ -191,49 +199,89 @@ describe("sendGlyphColumn", () => {
 	});
 });
 
-describe("notesSummaryRow", () => {
-	it("renders the compact header alone when there is nothing pending", () => {
+describe("buildCompactNotesRow", () => {
+	// Real zero-width ANSI escapes (like the harness): tag fakes inflate
+	// visibleWidth and clip the header mid-style, so the compact geometry
+	// needs escapes that measure honestly.
+	const ROLES: Record<string, string> = { accent: "205", border: "238", muted: "242", text: "250", success: "114", dim: "243", warning: "214" };
+	const floatTheme = {
+		fg: (role: string, text: string) => `\x1b[38;5;${ROLES[role] ?? "250"}m${text}\x1b[0m`,
+		strikethrough: (text: string) => `\x1b[9m${text}\x1b[29m`,
+		bg: (role: string, text: string) => `\x1b[48;5;22m${text}\x1b[49m`,
+	};
+	const mixedState = () => {
 		let state = emptyNotes();
-		state = unwrap(addNote(state, "a", 1)).state;
-		state = unwrap(markSent(state, 1, 2)).state;
-		state = unwrap(addNote(state, "b", 3)).state;
-		state = unwrap(markSent(state, 2, 4)).state;
-		assert.equal(
-			notesSummaryRow(state, theme, 60),
-			`<accent>✉</accent> <text>Notes</text> <muted>· 0 pend · 2 sent</muted>`,
-		);
+		state = unwrap(addNote(state, "uno", 1)).state;
+		state = unwrap(addNote(state, "dos", 2)).state;
+		state = unwrap(markSent(state, 2, 3)).state;
+		state = unwrap(addNote(state, "tres", 4)).state;
+		return state;
+	};
+
+	it("renders nothing while the notepad is empty", () => {
+		const view = buildCompactNotesRow(emptyNotes(), floatTheme, 60, { collapsed: true });
+		assert.deepEqual(view.rows, []);
+		assert.equal(view.control, undefined);
+		assert.deepEqual(view.hits, []);
 	});
 
-	it("appends the last pending note by id in quotes", () => {
+	it("collapsed paints one card-styled line: air, control inline, background", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
+		const view = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: true });
+		assert.equal(view.rows.length, 1);
+		const row = view.rows[0]!;
+		assert.ok(row.includes("✉  Notes"), `glyph carries its air: ${row}`);
+		assert.ok(row.includes("▸ Expand"), `control inline after the title: ${row}`);
+		assert.ok(row.includes("2 pend · 1 sent"), `summary trails: ${row}`);
+		assert.ok(row.startsWith(" \x1b[48;5;22m"), `tone background behind the line: ${row}`);
+		assert.deepEqual(view.control, { start: 12, end: 19 });
+		assert.equal(view.headerRow, 0);
+		assert.deepEqual(view.hits, []);
+	});
+
+	it("collapses to the bare chevron on narrow rows without a hit span", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
+		const view = buildCompactNotesRow(mixedState(), floatTheme, 20, { collapsed: true });
+		assert.equal(view.rows.length, 1);
+		assert.ok(view.rows[0]?.includes("▸"), `chevron survives the clip: ${view.rows[0]}`);
+		assert.ok(!view.rows[0]?.includes("Expand"), "the label drops when narrow");
+		assert.equal(view.control, undefined, "no hit span while the header clips");
+	});
+
+	it("paints the control with the hover role while the pointer is on it", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
+		const view = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: true, controlHovered: true });
+		assert.ok(view.rows[0]?.includes("\x1b[38;5;214m▸ Expand\x1b[0m"), `hover role paints: ${view.rows[0]}`);
+	});
+
+	it("expanded grows into the bounded list with the collapse control and hits", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
+		const view = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: false });
+		assert.ok(view.rows.length > 1);
+		assert.equal(view.headerRow, 1);
+		assert.ok(view.rows[1]?.includes("▾ Collapse"), `header control flips: ${view.rows[1]}`);
+		assert.deepEqual(view.control, { start: 12, end: 21 });
+		assert.ok(view.rows[3]?.includes("uno"), `the list begins under the header: ${view.rows[3]}`);
+		assert.deepEqual(view.hits, [{ row: 3, id: 1 }, { row: 4, id: 3 }]);
+	});
+
+	it("expanded folds the list at the row cap", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
 		let state = emptyNotes();
-		state = unwrap(addNote(state, "primera", 1)).state;
-		state = unwrap(addNote(state, "segunda", 2)).state;
-		assert.equal(
-			notesSummaryRow(state, theme, 60),
-			`<accent>✉</accent> <text>Notes</text> <muted>· 2 pend · 0 sent</muted><muted> — "segunda"</muted>`,
-		);
+		for (let id = 1; id <= 10; id++) state = unwrap(addNote(state, `nota ${id}`, id)).state;
+		const view = buildCompactNotesRow(state, floatTheme, 60, { collapsed: false });
+		assert.equal(view.hits.length, 8);
+		assert.ok(view.rows.some((line) => line.includes("… 2 more")), `fold count paints: ${view.rows.join(" | ")}`);
 	});
 
-	it("truncates the quoted note to fit the row", () => {
-		const state = unwrap(addNote(emptyNotes(), "revisar el padding del rail en narrow", 1)).state;
-		assert.equal(
-			notesSummaryRow(state, theme, 40),
-			`<accent>✉</accent> <text>Notes</text> <muted>· 1 pend · 0 sent</muted><muted> — "revisar e…"</muted>`,
-		);
-	});
-
-	it("drops the quote when the row is too narrow to be useful", () => {
-		const state = unwrap(addNote(emptyNotes(), "hola", 1)).state;
-		assert.equal(
-			notesSummaryRow(state, theme, 26),
-			`<accent>✉</accent> <text>Notes</text> <muted>· 1 pend · 0 sent</muted>`,
-		);
-	});
-
-	it("renders the empty summary for an empty state", () => {
-		assert.equal(
-			notesSummaryRow(emptyNotes(), theme, 60),
-			`<accent>✉</accent> <text>Notes</text> <muted>· 0 pend · 0 sent</muted>`,
-		);
+	it("outlined styles fall back to the collapsed panel without a hit span", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "neon";
+		const collapsed = buildCompactNotesRow(mixedState(), theme, 60, { collapsed: true });
+		assert.equal(collapsed.rows.length, 2);
+		assert.ok(collapsed.rows[0]?.includes("Notes"), `title paints in the frame: ${collapsed.rows[0]}`);
+		assert.equal(collapsed.control, undefined);
+		const expanded = buildCompactNotesRow(mixedState(), theme, 60, { collapsed: false });
+		assert.ok(expanded.rows.length > 3, "the list paints inside the frame");
+		assert.deepEqual(expanded.hits, [{ row: 1, id: 1 }, { row: 2, id: 3 }]);
 	});
 });

@@ -11,6 +11,7 @@
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { NOTE_STATUS, notesSummary, type NoteTask, type NotesState, type NotesSummary } from "./notes-state.ts";
+import { CARD_TONE, panelExtraRows, panelFloatApplies, panelHeaderRow, panelInnerWidth, renderCardPanel, renderPanelHeaderLine, type PanelCard } from "./card-chrome.ts";
 
 export const NOTE_GLYPH = {
 	pending: "✉",
@@ -179,25 +180,68 @@ export function sendGlyphColumn(line: string): number | undefined {
 	return undefined;
 }
 
-function summaryHeader(state: NotesState, theme: NotesCardTheme): string {
-	const summary = notesSummary(state);
-	return `${theme.fg("accent", NOTE_GLYPH.pending)} ${theme.fg("text", "Notes")} ${theme.fg("muted", `· ${summary.pending} pend · ${summary.sent} sent`)}`;
+/** Width from which the compact control shows its label, mirroring the Todos. */
+const CONTROL_LABEL_WIDTH = 28;
+/** Note rows the expanded compact shows before folding the rest. */
+const COMPACT_ROW_CAP = 8;
+
+/** The expand/collapse control in the Todos grammar: chevron plus label while
+ * the header has room, painted with the hover role while the pointer is on it
+ * and the accent role otherwise. */
+function expandControl(collapsed: boolean, hovered: boolean, theme: NotesCardTheme, labelFits: boolean): { styled: string; width: number } {
+	const text = `${collapsed ? "▸" : "▾"}${labelFits ? ` ${collapsed ? "Expand" : "Collapse"}` : ""}`;
+	return { styled: hovered ? theme.fg("warning", text) : theme.fg("accent", text), width: text.length };
 }
 
-/** Compact one-row summary for regular mode: header plus the last pending note
- * by id, truncated with an ellipsis to fit the row. The quote is dropped when
- * the row is too narrow to hold a useful fragment. */
-export function notesSummaryRow(state: NotesState, theme: NotesCardTheme, inner: number): string {
+export interface CompactNotesView {
+	rows: string[];
+	/** Row the header (and its control) paints on. */
+	headerRow: number;
+	/** Visible column span of the control, while the header fits unclipped. */
+	control?: { start: number; end: number };
+	/** Pending-note hit rows, in rendered coordinates. */
+	hits: NotesCardHit[];
+}
+
+/** The compact notepad above the editor: one card-styled line — glyph with
+ * its air, title, the expand/collapse control inline, summary trailing —
+ * with the panel's tone background, like the Todos header. Expanded it
+ * grows into the bounded note list with the same send glyphs as the rail. */
+export function buildCompactNotesRow(
+	state: NotesState,
+	theme: NotesCardTheme,
+	width: number,
+	options: { collapsed: boolean; controlHovered?: boolean; hoveredId?: number },
+): CompactNotesView {
+	if (state.notes.length === 0) return { rows: [], headerRow: 0, hits: [] };
 	const summary = notesSummary(state);
-	const header = summaryHeader(state, theme);
-	if (summary.pending === 0) return header;
-	const lastPending = state.notes.filter((note) => note.status === NOTE_STATUS.PENDING).pop();
-	if (!lastPending) return header;
-	const base = `✉ Notes · ${summary.pending} pend · ${summary.sent} sent`.length;
-	const available = inner - base - 3;
-	if (available < 5) return header;
-	const budget = available - 2;
-	const text = sanitizeNoteText(lastPending.text);
-	const shown = text.length <= budget ? text : `${text.slice(0, Math.max(1, budget - 1))}…`;
-	return `${header}${theme.fg("muted", ` — "${shown}"`)}`;
+	const subtitle = `${summary.pending} pend · ${summary.sent} sent`;
+	// The control begins right after the rail, the glyph and the title word —
+	// a fixed column in every style — and only hit-tests while the header
+	// fits the row without clipping.
+	const controlStart = 12;
+	const room = width - 2;
+	const label = `${options.collapsed ? "▸" : "▾"} ${options.collapsed ? "Expand" : "Collapse"}`;
+	const labelFits = width >= CONTROL_LABEL_WIDTH && 13 + label.length + visibleWidth(subtitle) <= room;
+	const control = expandControl(options.collapsed, options.controlHovered === true, theme, labelFits);
+	const span = panelFloatApplies(theme, width) && 13 + control.width + visibleWidth(subtitle) <= room
+		? { start: controlStart, end: controlStart + control.width - 1 }
+		: undefined;
+	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle, body: [], tone: CARD_TONE.INFO, glyph: "✉ " };
+	if (options.collapsed) {
+		return { rows: renderPanelHeaderLine(card, theme, width), headerRow: 0, control: span, hits: [] };
+	}
+	const view = buildNotesCard(state, theme, panelInnerWidth(theme, width), options.hoveredId);
+	const body = view.bodyRows.slice(0, COMPACT_ROW_CAP);
+	if (view.bodyRows.length > body.length) body.push(theme.fg("muted", `… ${view.bodyRows.length - body.length} more`));
+	const rows = renderCardPanel({ ...card, body }, theme, width, { expanded: true });
+	const headerRow = panelHeaderRow(theme, width);
+	// The float panel pads around its header; the outline frame does not.
+	const bodyStart = panelExtraRows(theme, width) + 1;
+	return {
+		rows,
+		headerRow,
+		control: span,
+		hits: view.hits.filter((hit) => hit.row < COMPACT_ROW_CAP).map((hit) => ({ ...hit, row: bodyStart + hit.row })),
+	};
 }
