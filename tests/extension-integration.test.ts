@@ -18,10 +18,12 @@ import gentleNotes from "../src/extension.ts";
 import { sidebarState } from "../src/sidebar-interop.ts";
 import { loadNotes } from "../src/storage.ts";
 import { NOTE_STATUS } from "../src/notes-state.ts";
+import { controlSpan } from "../src/notes-card.ts";
 import { sendGlyphColumn } from "../src/notes-card.ts";
 
 const MANAGER_ADD = "＋ Add a note…";
 const ACCENT = "\x1b[38;5;205m";
+const WARNING = "\x1b[38;5;214m";
 const MUTED = "\x1b[38;5;242m";
 const FLUSH = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -382,6 +384,88 @@ describe("gentle-notes extension wiring", () => {
 		const painted = output.join("\n");
 		assert.ok(painted.includes("MARCAFINAL"), "the text being typed stays visible");
 		assert.ok(!painted.includes("PRINCIPIO"), "the field scrolled past the head of the capture");
+	});
+
+	it("carries both header controls with their actions (S8)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const header = rail.render(46)[1] ?? "";
+		assert.ok(header.includes("▾ Collapse"), `collapse control in the header: ${JSON.stringify(header)}`);
+		assert.ok(header.includes("▾ Fold"), `fold control in the header: ${JSON.stringify(header)}`);
+	});
+
+	it("collapses the block from its header control and keeps the draft (S8)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		rail.handleInput?.("borrador en curso");
+		const expanded = rail.render(46);
+		assert.ok(expanded.some((line) => line.includes("borrador")), "the draft paints in the field");
+		const span = controlSpan(expanded[1] ?? "", "▾ Collapse");
+		assert.ok(span, "the collapse control has a span on the header row");
+		rail.handleMouse?.(mouse("click", span.start, 1, 46));
+		const collapsed = rail.render(46);
+		assert.ok(collapsed[1]?.includes("▸ Expand"), `the control offers to expand: ${JSON.stringify(collapsed[1])}`);
+		assert.ok(!collapsed.some((line) => line.includes("borrador")), "the field leaves the collapsed block");
+		assert.equal(harness.getFocus(), null, "collapsing releases the keyboard");
+		const back = controlSpan(collapsed[1] ?? "", "▸ Expand");
+		assert.ok(back, "the expand control has a span");
+		rail.handleMouse?.(mouse("click", back.start, 1, 46));
+		const again = rail.render(46);
+		assert.ok(again[1]?.includes("▾ Collapse"), "expanding restores the control");
+		assert.ok(again.some((line) => line.includes("borrador")), "the draft survives the round trip");
+	});
+
+	it("folds every note to one line from its header control (S8)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		rail.handleInput?.("una nota larguisima que se extiende mucho mas alla de una sola fila visible del bloque");
+		rail.handleInput?.("\r");
+		await FLUSH();
+		const unfolded = rail.render(46);
+		assert.ok(unfolded.length > 6, `the card grows with the wrap: ${unfolded.length}`);
+		const span = controlSpan(unfolded[1] ?? "", "▾ Fold");
+		assert.ok(span, "the fold control has a span");
+		rail.handleMouse?.(mouse("click", span.start, 1, 46));
+		const folded = rail.render(46);
+		assert.ok(folded[1]?.includes("▸ Full"), `the control offers the full text back: ${JSON.stringify(folded[1])}`);
+		assert.ok(folded.length < unfolded.length, `folding shortens the card: ${folded.length} < ${unfolded.length}`);
+		assert.ok(folded.some((line) => line.includes("…")), "the folded note marks the hidden text");
+		assert.ok(folded.some((line) => line.includes("➤")), "the send glyph stays on the folded row");
+	});
+
+	it("paints the control under the pointer with the hover role (S8)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const span = controlSpan(rail.render(46)[1] ?? "", "▾ Fold");
+		assert.ok(span, "the fold control has a span");
+		rail.handleMouse?.(mouse("move", span.start, 1, 46));
+		const hovered = rail.render(46)[1] ?? "";
+		assert.ok(hovered.includes(`${WARNING}▾ Fold`), `hover paints the warning role: ${JSON.stringify(hovered)}`);
+		assert.ok(!hovered.includes(`${WARNING}▾ Collapse`), "the other control keeps its idle role");
+	});
+
+	it("drives both view modes from the notes command (S8)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		await harness.runCommand("fold", project);
+		assert.ok(rail.render(46)[1]?.includes("▸ Full"), "fold from the command");
+		await harness.runCommand("unfold", project);
+		assert.ok(rail.render(46)[1]?.includes("▾ Fold"), "unfold from the command");
+		await harness.runCommand("collapse", project);
+		assert.ok(rail.render(46)[1]?.includes("▸ Expand"), "collapse from the command");
+		assert.ok(!rail.render(46).some((line) => line.includes("＋ Write a note…")), "the field leaves the collapsed block");
+		await harness.runCommand("expand", project);
+		assert.ok(rail.render(46)[1]?.includes("▾ Collapse"), "expand from the command");
 	});
 
 	it("returns the keyboard to the chat on Escape", async () => {

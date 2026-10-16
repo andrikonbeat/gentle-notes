@@ -5,12 +5,12 @@
 // compact summary row above the editor in regular mode. All interactions have
 // a keyboard path: the /notes command and the alt+n manager dialog.
 import type { Component, EditorTheme, KeyId, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { CURSOR_MARKER, Editor, ScrollView, truncateToWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Editor, ScrollView, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { NOTE_STATUS, addNote, clearNotes, emptyNotes, markSent, notesSummary, updateNoteText, type NotesState } from "./notes-state.ts";
 import { loadNotes, mutateNotes } from "./storage.ts";
-import { buildCompactNotesRow, buildNotesCard, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
-import { CARD_GLYPH, CARD_TONE, paintPanelRows, panelBodyLine, panelBodyWidth, panelContentColumn, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
+import { buildCompactNotesRow, buildNotesCard, collapsedNoteRow, controlSpan, railControlText, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
+import { CARD_GLYPH, CARD_TONE, paintPanelRows, panelBodyLine, panelBodyWidth, panelContentColumn, panelFloatApplies, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
 import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
 
 
@@ -30,12 +30,12 @@ const RAIL_HINT = "alt+n";
 const RAIL_BODY_CAP = 16;
 
 const HELP = [
-	"Usage: /notes [add <text> | send [<id>] | list | clear]",
+	"Usage: /notes [add <text> | send [<id>] | list | clear | collapse | expand | fold | unfold]",
 	"alt+n opens the notes manager; click ➤ on a rail row to send it to the chat.",
 ].join("\n");
 
 export interface NotesArgs {
-	action: "manage" | "add" | "send" | "list" | "clear" | "help";
+	action: "manage" | "add" | "send" | "list" | "clear" | "help" | "collapse" | "expand" | "fold" | "unfold";
 	rest: string;
 	id?: number;
 }
@@ -58,6 +58,14 @@ export function parseNotesArgs(args: string): NotesArgs {
 			return { action: "list", rest: payload };
 		case "clear":
 			return { action: "clear", rest: payload };
+		case "collapse":
+			return { action: "collapse", rest: payload };
+		case "expand":
+			return { action: "expand", rest: payload };
+		case "fold":
+			return { action: "fold", rest: payload };
+		case "unfold":
+			return { action: "unfold", rest: payload };
 		case "help":
 			return { action: "help", rest: payload };
 		default:
@@ -87,6 +95,22 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		if (!widgetTui) return;
 		invalidateSidebar(widgetTui);
 		widgetTui.requestRender();
+	};
+
+	// The rail card's view: the block collapses to its header plus one row and
+	// the notes fold to their first line. Session scoped, like the Todos card.
+	const railView = { collapsed: false, folded: false, collapseHovered: false, foldHovered: false };
+
+	/** Collapse or expand the rail block; a hidden field never keeps the keyboard. */
+	const setRailCollapsed = (next: boolean): void => {
+		railView.collapsed = next;
+		if (next) widgetTui?.setFocus(null);
+		refresh();
+	};
+
+	const setRailFolded = (next: boolean): void => {
+		railView.folded = next;
+		refresh();
 	};
 
 	/** Read-modify-write through the storage queue, refreshing the UI after. */
@@ -164,7 +188,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		let inputTick = 0;
 		// First visible row of the field's own window (see the render path).
 		let fieldScrollTop = 0;
-		let lastRender: { output: string[]; headRows: number; fieldTop: number; editorRows: number; notesStart: number; contentColumn: number; editStart: number | undefined; editRows: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
+		let lastRender: { output: string[]; headRows: number; headerRow: number; collapseSpan: { start: number; end: number } | undefined; foldSpan: { start: number; end: number } | undefined; fieldTop: number; editorRows: number; notesStart: number; contentColumn: number; editStart: number | undefined; editRows: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
 
 		const commitEdit = async (text: string): Promise<void> => {
 			const id = editingId;
@@ -199,14 +223,31 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				const headerRow = panelHeaderRow(cardTheme, width, tone);
 				const inner = panelInnerWidth(cardTheme, width, tone);
 				// Focusable propagation: the TUI focuses this card; whichever
-				// field is active owns the cursor marker.
-				input.focused = self.focused && editingId === undefined;
-				editInput.focused = self.focused && editingId !== undefined;
-				const view = buildNotesCard(current, cardTheme, inner, hoveredId, editingId);
+				// field is active owns the cursor marker — and a collapsed block
+				// shows no field at all.
+				input.focused = self.focused && editingId === undefined && !railView.collapsed;
+				editInput.focused = self.focused && editingId !== undefined && !railView.collapsed;
+				const view = buildNotesCard(current, cardTheme, inner, hoveredId, editingId, { folded: railView.folded });
+				const subtitle = `${view.summary.pending} pend · ${view.summary.sent} sent`;
+				// Both control labels show while the header holds them and the
+				// subtitle unclipped; below that the chevrons stand alone.
+				const wide = railControlText({ collapsed: railView.collapsed, folded: railView.folded, labelFits: true });
+				const measured = 2 + visibleWidth(`${CARD_GLYPH} Notes ${wide.collapse} ${wide.fold}`) + 2 + visibleWidth(subtitle);
+				// The header has its own room, not the body's: the float panel
+				// draws it with the accent lead and the margin the body rows
+				// spend on their side rails, and the outlined frame spends five
+				// columns on its rules before the title starts.
+				const headerRoom = panelFloatApplies(cardTheme, width, tone) ? panelBodyWidth(cardTheme, width, tone) : panelBodyWidth(cardTheme, width, tone) - 5;
+				const controls = measured <= headerRoom ? wide : railControlText({ collapsed: railView.collapsed, folded: railView.folded, labelFits: false });
+				const paint = (text: string, controlHovered: boolean): string => cardTheme.fg(controlHovered ? "warning" : "accent", text);
+				const title = `Notes ${paint(controls.collapse, railView.collapseHovered)} ${paint(controls.fold, railView.foldHovered)}`;
+				// Collapsed the block is its header and one row: the first pending
+				// note (or the first sent one). The field leaves with the list.
+				const body = railView.collapsed ? collapsedNoteRow(current, cardTheme, inner) : view.bodyRows;
 				// The panel frames only the note rows; both editors draw their
 				// own frames, so their rows splice in raw around the scroll.
 				const lines = renderCardPanel(
-					{ title: "Notes", subtitle: `${view.summary.pending} pend · ${view.summary.sent} sent`, body: view.bodyRows, tone, glyph: CARD_GLYPH },
+					{ title, subtitle, body, tone, glyph: CARD_GLYPH },
 					cardTheme,
 					width,
 					{ expanded: true, hint: RAIL_HINT },
@@ -218,7 +259,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				const bodyWidth = panelBodyWidth(cardTheme, width, tone);
 				bodyCache = lines.slice(headRows, lines.length - 1);
 				let editBlock: string[] | undefined;
-				if (editingId !== undefined && view.editSlot !== undefined) {
+				if (!railView.collapsed && editingId !== undefined && view.editSlot !== undefined) {
 					editBlock = paintPanelRows(editInput.render(inner).slice(1, -1).map((row) => panelBodyLine(row, tone, cardTheme, width)), cardTheme, width, tone);
 					bodyCache.splice(view.editSlot, 0, ...editBlock);
 				}
@@ -234,7 +275,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// inside the budget and follows the cursor marker. Letting the
 				// card grow past its budget is what puts the line being typed
 				// below the visible edge, where no scroller follows it.
-				const rendered = input.render(inner).slice(1, -1);
+				const rendered = railView.collapsed ? [] : input.render(inner).slice(1, -1);
 				const fieldRoom = Math.max(1, height - headRows - 3);
 				const cursorRow = rendered.findIndex((row) => row.includes(CURSOR_MARKER));
 				if (cursorRow >= 0) {
@@ -255,9 +296,18 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				const notesStart = headRows + fieldRows.length;
 				const output = [...lines.slice(0, headRows), ...fieldRows, ...visible, ...lines.slice(lines.length - 1)];
 				if (overflow) output.push(...paintPanelRows([cardTheme.fg("muted", truncateToWidth(`↑↓ ${scroll.scrollTop + 1}–${scroll.scrollTop + visible.length}/${bodyCache.length}`, bodyWidth))], cardTheme, width, tone));
+				// The header row carries the two view controls: the click map
+				// reads their columns off the rendered line, so the targets stay
+				// right in every card style.
+				const headerLine = lines[headerRow] ?? "";
+				const collapseSpan = controlSpan(headerLine, controls.collapse);
+				const foldSpan = controlSpan(headerLine, controls.fold, collapseSpan ? collapseSpan.end + 1 : 0);
 				lastRender = {
 					output,
 					headRows,
+					headerRow,
+					collapseSpan,
+					foldSpan,
 					fieldTop: fieldScrollTop,
 					editorRows: fieldRows.length,
 					contentColumn: panelContentColumn(cardTheme, width, tone),
@@ -268,7 +318,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					editRows: editBlock?.length ?? 0,
 					visibleRows: visible.length,
 					scrollTop: scroll.scrollTop,
-					hits: view.hits,
+					hits: railView.collapsed ? [] : view.hits,
 				};
 				return output;
 			},
@@ -290,7 +340,26 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 			},
 			handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
 				const last = lastRender;
+				const inside = (span: { start: number; end: number } | undefined, x: number): boolean => span !== undefined && x >= span.start && x <= span.end;
 				if (event.type === "move" || event.type === "drag") {
+					// The header row carries the two view controls: pointing at
+					// one paints the shared hover role, and the rest of the card
+					// keeps its own send-glyph hover.
+					if (last && event.y === last.headerRow) {
+						const onCollapse = inside(last.collapseSpan, event.x);
+						const onFold = inside(last.foldSpan, event.x);
+						if (onCollapse !== railView.collapseHovered || onFold !== railView.foldHovered) {
+							railView.collapseHovered = onCollapse;
+							railView.foldHovered = onFold;
+							return { handled: true, render: true };
+						}
+						return { handled: true, render: false };
+					}
+					if (railView.collapseHovered || railView.foldHovered) {
+						railView.collapseHovered = false;
+						railView.foldHovered = false;
+						return { handled: true, render: true };
+					}
 					const found = rowHitAt(event.y);
 					const next = found && found.column !== undefined && Math.abs(event.x - found.column) <= SEND_HIT_TOLERANCE ? found.id : undefined;
 					if (next === hoveredId) return { handled: true, render: false };
@@ -299,6 +368,19 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				}
 				if (event.type === "click") {
 					if (!last) return {};
+					// The header controls toggle the block and the notes' text
+					// mode; the rest of the header is the card's own chrome.
+					if (event.y === last.headerRow) {
+						if (inside(last.collapseSpan, event.x)) {
+							setRailCollapsed(!railView.collapsed);
+							return { handled: true, render: true };
+						}
+						if (inside(last.foldSpan, event.x)) {
+							setRailFolded(!railView.folded);
+							return { handled: true, render: true };
+						}
+						return { handled: true, render: false };
+					}
 					// The editor block owns the keyboard: clicking it takes
 					// focus and positions the caret where the pointer is.
 					if (event.y >= last.headRows && event.y < last.notesStart) {
@@ -340,7 +422,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				return {};
 			},
 			digest(): string {
-				return JSON.stringify([current, hoveredId, scroll.scrollTop, fieldScrollTop, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
+				return JSON.stringify([current, hoveredId, scroll.scrollTop, fieldScrollTop, railView, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
 			},
 			invalidate(): void {
 				input.invalidate();
@@ -499,6 +581,18 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					return;
 				case "clear":
 					if (!ctx.hasUI || (await ctx.ui.confirm("Clear all notes", "Remove every note, pending and sent?"))) await clearAll();
+					return;
+				case "collapse":
+					setRailCollapsed(true);
+					return;
+				case "expand":
+					setRailCollapsed(false);
+					return;
+				case "fold":
+					setRailFolded(true);
+					return;
+				case "unfold":
+					setRailFolded(false);
 					return;
 				case "help":
 					notify(HELP);

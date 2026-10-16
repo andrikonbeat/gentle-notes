@@ -106,7 +106,7 @@ describe("rail controls (S8)", () => {
 		const idle = railControlText({ collapsed: false, folded: false, labelFits: true });
 		assert.deepEqual(idle, { collapse: "▾ Collapse", fold: "▾ Fold" });
 		const closed = railControlText({ collapsed: true, folded: true, labelFits: true });
-		assert.deepEqual(closed, { collapse: "▸ Expand", fold: "▸ Unfold" });
+		assert.deepEqual(closed, { collapse: "▸ Expand", fold: "▸ Full" });
 	});
 
 	it("keeps the chevrons and drops the labels when the header is tight", () => {

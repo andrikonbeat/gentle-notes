@@ -188,7 +188,9 @@ export function railControlText(options: { collapsed: boolean; folded: boolean; 
 	const label = (text: string): string => (options.labelFits ? ` ${text}` : "");
 	return {
 		collapse: `${chevron(!options.collapsed)}${label(options.collapsed ? "Expand" : "Collapse")}`,
-		fold: `${chevron(!options.folded)}${label(options.folded ? "Unfold" : "Fold")}`,
+		// "Fold"/"Full" instead of "Fold"/"Unfold": the rail header is 42
+		// columns wide, and the longer pair overflowed it in the folded state.
+		fold: `${chevron(!options.folded)}${label(options.folded ? "Full" : "Fold")}`,
 	};
 }
 
