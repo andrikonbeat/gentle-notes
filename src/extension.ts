@@ -5,7 +5,7 @@
 // compact summary row above the editor in regular mode. All interactions have
 // a keyboard path: the /notes command and the alt+n manager dialog.
 import type { Component, EditorTheme, KeyId, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { Editor, ScrollView, truncateToWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Editor, ScrollView, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { NOTE_STATUS, addNote, clearNotes, emptyNotes, markSent, notesSummary, updateNoteText, type NotesState } from "./notes-state.ts";
 import { loadNotes, mutateNotes } from "./storage.ts";
@@ -162,7 +162,9 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		const scroll = new ScrollView({ render: () => bodyCache, invalidate() {} }, { follow: "none", overscroll: "contain" });
 		let bodyCache: string[] = [];
 		let inputTick = 0;
-		let lastRender: { output: string[]; headRows: number; editorRows: number; notesStart: number; contentColumn: number; editStart: number | undefined; editRows: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
+		// First visible row of the field's own window (see the render path).
+		let fieldScrollTop = 0;
+		let lastRender: { output: string[]; headRows: number; fieldTop: number; editorRows: number; notesStart: number; contentColumn: number; editStart: number | undefined; editRows: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
 
 		const commitEdit = async (text: string): Promise<void> => {
 			const id = editingId;
@@ -223,16 +225,29 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// The card is the field's frame: the editor's own border rows
 				// drop out and its content rows dress in the panel background,
 				// so the wrapping field reads as part of the block.
-				const fieldContent = input.render(inner).slice(1, -1).map((row) => panelBodyLine(row, tone, cardTheme, width));
+				// Bounded like the Todos panel: at most one third of the screen,
+				// with the header, the editor and the rule outside the scroll.
+				const terminalRows = (widgetTui?.terminal as unknown as { rows?: number } | undefined)?.rows ?? 48;
+				const height = Math.min(RAIL_BODY_CAP, Math.floor(terminalRows / 3));
+				// The editor windows itself at 30% of the terminal — more rows
+				// than this card can hold — so the field takes its own window
+				// inside the budget and follows the cursor marker. Letting the
+				// card grow past its budget is what puts the line being typed
+				// below the visible edge, where no scroller follows it.
+				const rendered = input.render(inner).slice(1, -1);
+				const fieldRoom = Math.max(1, height - headRows - 3);
+				const cursorRow = rendered.findIndex((row) => row.includes(CURSOR_MARKER));
+				if (cursorRow >= 0) {
+					if (cursorRow < fieldScrollTop) fieldScrollTop = cursorRow;
+					else if (cursorRow >= fieldScrollTop + fieldRoom) fieldScrollTop = cursorRow - fieldRoom + 1;
+				}
+				fieldScrollTop = Math.max(0, Math.min(fieldScrollTop, Math.max(0, rendered.length - fieldRoom)));
+				const fieldContent = rendered.slice(fieldScrollTop, fieldScrollTop + fieldRoom).map((row) => panelBodyLine(row, tone, cardTheme, width));
 				if (input.getText().trim().length === 0 && !input.focused && fieldContent.length >= 1) {
 					// An empty, unfocused field paints its affordance instead of a blank.
 					fieldContent[0] = panelBodyLine(cardTheme.fg("muted", "＋ Write a note…"), tone, cardTheme, width);
 				}
 				const fieldRows = paintPanelRows(fieldContent, cardTheme, width, tone);
-				// Bounded like the Todos panel: at most one third of the screen,
-				// with the header, the editor and the rule outside the scroll.
-				const terminalRows = (widgetTui?.terminal as unknown as { rows?: number } | undefined)?.rows ?? 48;
-				const height = Math.min(RAIL_BODY_CAP, Math.floor(terminalRows / 3));
 				const overflow = headRows + fieldRows.length + bodyCache.length + 1 > height;
 				const room = Math.max(1, height - headRows - fieldRows.length - 1 - Number(overflow));
 				scroll.updateLayout(bodyCache.length, room, () => widgetTui?.requestRender());
@@ -243,6 +258,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				lastRender = {
 					output,
 					headRows,
+					fieldTop: fieldScrollTop,
 					editorRows: fieldRows.length,
 					contentColumn: panelContentColumn(cardTheme, width, tone),
 					notesStart,
@@ -289,8 +305,9 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 						editingId = undefined;
 						widgetTui?.setFocus(self);
 						// Coordinates shift into the editor's own frame: the top
-						// border row the card strips, and the panel's side rail.
-						input.handleMouse({ ...event, y: event.y - last.headRows + 1, x: Math.max(0, event.x - last.contentColumn) });
+						// border row the card strips, the window's first visible
+						// row, and the panel's side rail.
+						input.handleMouse({ ...event, y: event.y - last.headRows + last.fieldTop + 1, x: Math.max(0, event.x - last.contentColumn) });
 						return { handled: true, render: true };
 					}
 					if (last.editStart !== undefined && event.y >= last.editStart && event.y < last.editStart + last.editRows) {
@@ -323,7 +340,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				return {};
 			},
 			digest(): string {
-				return JSON.stringify([current, hoveredId, scroll.scrollTop, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
+				return JSON.stringify([current, hoveredId, scroll.scrollTop, fieldScrollTop, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
 			},
 			invalidate(): void {
 				input.invalidate();

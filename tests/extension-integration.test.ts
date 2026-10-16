@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import type { Component, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import gentleNotes from "../src/extension.ts";
@@ -362,6 +362,26 @@ describe("gentle-notes extension wiring", () => {
 		rail.handleInput?.("\r");
 		await FLUSH();
 		assert.equal(loadNotes(project).notes[0]?.text, "una nota larguisima que se extiende mucho mas alla de una sola fila visible");
+	});
+
+	it("scrolls the field so the cursor stays visible while a long capture grows", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		// A capture wrapping far past the card's own budget: the field windows
+		// itself around the cursor instead of pushing the card past the edge.
+		rail.handleInput?.(`PRINCIPIO ${"charla ".repeat(120)}MARCAFINAL`);
+		const output = rail.render(46);
+		const budget = Math.min(16, Math.floor(48 / 3));
+		assert.ok(output.length <= budget, `the card holds its own budget: ${output.length} > ${budget}`);
+		const markerRow = output.findIndex((line) => line.includes(CURSOR_MARKER));
+		assert.ok(markerRow >= 0, "the cursor marker stays in the card");
+		assert.ok(markerRow < budget, `the cursor row stays inside the budget: row ${markerRow} of ${budget}`);
+		const painted = output.join("\n");
+		assert.ok(painted.includes("MARCAFINAL"), "the text being typed stays visible");
+		assert.ok(!painted.includes("PRINCIPIO"), "the field scrolled past the head of the capture");
 	});
 
 	it("returns the keyboard to the chat on Escape", async () => {
