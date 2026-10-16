@@ -200,7 +200,7 @@ function makeHarness(): Harness {
 	};
 }
 
-function mouse(type: string, x: number, y: number, width: number, wheelDelta?: number): TuiMouseEvent {
+function mouse(type: string, x: number, y: number, width: number, wheelDelta?: number, clickCount?: number): TuiMouseEvent {
 	return {
 		type,
 		button: "left",
@@ -214,6 +214,7 @@ function mouse(type: string, x: number, y: number, width: number, wheelDelta?: n
 		alt: false,
 		ctrl: false,
 		...(wheelDelta !== undefined ? { wheelDelta } : {}),
+		...(clickCount !== undefined ? { clickCount } : {}),
 	} as TuiMouseEvent;
 }
 
@@ -550,6 +551,50 @@ describe("gentle-notes extension wiring", () => {
 		assert.deepEqual(loadNotes(project).notes.map((note) => note.text), ["corregir el typos"]);
 		assert.equal(harness.getFocus(), null, "committing the edit returns the keyboard to the chat");
 		assert.ok(rail.render(46).join("\n").includes("➤"), "the note row paints again");
+	});
+
+	it("unfolds and edits on a click, folds back on a double click (L21)", async () => {
+		await harness.sessionStart(project);
+		const long = "una nota larguisima que se extiende mucho mas alla de una sola fila visible del bloque";
+		await harness.runCommand(`add ${long}`, project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const unfolded = rail.render(46);
+		const { row, column } = glyphRow(unfolded);
+		const x = column - 6;
+
+		rail.handleMouse?.(mouse("click", x, row, 46));
+		assert.ok(rail.render(46).some((line) => line.includes(CURSOR_MARKER)), "the click unfolds the note into the inline editor");
+
+		rail.handleMouse?.(mouse("click", x, row, 46, undefined, 2));
+		const folded = rail.render(46);
+		assert.equal(harness.getFocus(), null, "folding the note releases the keyboard");
+		assert.ok(folded.length < unfolded.length, `folding shortens the card: ${folded.length} < ${unfolded.length}`);
+		assert.ok(folded.some((line) => line.includes("…")), "the folded note marks the hidden text");
+		assert.ok(folded.some((line) => line.includes("➤")), "the send glyph stays on the folded row");
+		assert.deepEqual(loadNotes(project).notes.map((note) => note.text), [long], "an untouched fold writes nothing");
+
+		rail.handleMouse?.(mouse("click", x, row, 46));
+		assert.ok(rail.render(46).some((line) => line.includes(CURSOR_MARKER)), "a click unfolds it again into the editor");
+	});
+
+	it("folds only the double clicked note and keeps the rest open (L21)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add primera nota que ocupa bastante mas de una sola fila visible", project);
+		await harness.runCommand("add segunda nota que tambien pasa de una sola fila visible del bloque", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const before = rail.render(46);
+		const first = before.findIndex((line) => line.includes("primera nota"));
+		assert.ok(first >= 0, "the first note paints");
+		const column = sendGlyphColumn(before[first] as string);
+		assert.ok(column !== undefined);
+
+		rail.handleMouse?.(mouse("click", (column as number) - 6, first, 46));
+		rail.handleMouse?.(mouse("click", (column as number) - 6, first, 46, undefined, 2));
+		const after = rail.render(46);
+		assert.ok(after[first]?.includes("…"), `the double clicked note folds: ${JSON.stringify(after[first])}`);
+		assert.ok(after.some((line) => line.includes("segunda nota que tambien pasa")), "the other note keeps its full text");
 	});
 
 	it("cancels the inline edit with Escape and keeps the note unchanged", async () => {

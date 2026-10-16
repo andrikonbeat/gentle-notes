@@ -32,6 +32,7 @@ const RAIL_BODY_CAP = 16;
 const HELP = [
 	"Usage: /notes [add <text> | send [<id>] | list | clear | collapse | expand | fold | unfold]",
 	"alt+n opens the notes manager; click ➤ on a rail row to send it to the chat.",
+	"Click a note's text to edit it; double click folds it back to its first line.",
 ].join("\n");
 
 export interface NotesArgs {
@@ -97,9 +98,27 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		widgetTui.requestRender();
 	};
 
-	// The rail card's view: the block collapses to its header plus one row and
-	// the notes fold to their first line. Session scoped, like the Todos card.
-	const railView = { collapsed: false, folded: false, collapseHovered: false, foldHovered: false };
+	// The rail card's view: the block collapses to its header plus one row, the
+	// header's fold control sets the mode for the whole notepad, and a per-note
+	// gesture records its exception (L21: a click unfolds the note, a double
+	// click folds it). Session scoped, like the Todos card's collapsed flag.
+	const railView = {
+		collapsed: false,
+		foldAll: false,
+		foldOverrides: new Map<number, boolean>(),
+		collapseHovered: false,
+		foldHovered: false,
+	};
+
+	/** The notes rendered as one line right now: the mode, plus its exceptions. */
+	const foldedIdSet = (): Set<number> => new Set(current.notes.filter((note) => railView.foldOverrides.get(note.id) ?? railView.foldAll).map((note) => note.id));
+
+	/** Record one note's exception to the fold mode; the mode itself wins when
+	 * the two agree, so the map holds only real deviations. */
+	const foldNote = (id: number, folded: boolean): void => {
+		if (folded === railView.foldAll) railView.foldOverrides.delete(id);
+		else railView.foldOverrides.set(id, folded);
+	};
 
 	/** Collapse or expand the rail block; a hidden field never keeps the keyboard. */
 	const setRailCollapsed = (next: boolean): void => {
@@ -108,8 +127,11 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		refresh();
 	};
 
+	/** Fold or unfold every note; new notes follow the mode until a gesture
+	 * makes one of them an exception. */
 	const setRailFolded = (next: boolean): void => {
-		railView.folded = next;
+		railView.foldAll = next;
+		railView.foldOverrides.clear();
 		refresh();
 	};
 
@@ -227,18 +249,18 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// shows no field at all.
 				input.focused = self.focused && editingId === undefined && !railView.collapsed;
 				editInput.focused = self.focused && editingId !== undefined && !railView.collapsed;
-				const view = buildNotesCard(current, cardTheme, inner, hoveredId, editingId, { folded: railView.folded });
+				const view = buildNotesCard(current, cardTheme, inner, hoveredId, editingId, { foldedIds: foldedIdSet() });
 				const subtitle = `${view.summary.pending} pend · ${view.summary.sent} sent`;
 				// Both control labels show while the header holds them and the
 				// subtitle unclipped; below that the chevrons stand alone.
-				const wide = railControlText({ collapsed: railView.collapsed, folded: railView.folded, labelFits: true });
+				const wide = railControlText({ collapsed: railView.collapsed, folded: railView.foldAll, labelFits: true });
 				const measured = 2 + visibleWidth(`${CARD_GLYPH} Notes ${wide.collapse} ${wide.fold}`) + 2 + visibleWidth(subtitle);
 				// The header has its own room, not the body's: the float panel
 				// draws it with the accent lead and the margin the body rows
 				// spend on their side rails, and the outlined frame spends five
 				// columns on its rules before the title starts.
 				const headerRoom = panelFloatApplies(cardTheme, width, tone) ? panelBodyWidth(cardTheme, width, tone) : panelBodyWidth(cardTheme, width, tone) - 5;
-				const controls = measured <= headerRoom ? wide : railControlText({ collapsed: railView.collapsed, folded: railView.folded, labelFits: false });
+				const controls = measured <= headerRoom ? wide : railControlText({ collapsed: railView.collapsed, folded: railView.foldAll, labelFits: false });
 				const paint = (text: string, controlHovered: boolean): string => cardTheme.fg(controlHovered ? "warning" : "accent", text);
 				const title = `Notes ${paint(controls.collapse, railView.collapseHovered)} ${paint(controls.fold, railView.foldHovered)}`;
 				// Collapsed the block is its header and one row: the first pending
@@ -368,18 +390,38 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				}
 				if (event.type === "click") {
 					if (!last) return {};
+					// pi-tui counts consecutive clicks on the same cell: only the
+					// first one toggles, so a double click never undoes what the
+					// click just did.
+					const firstClick = (event.clickCount ?? 1) <= 1;
 					// The header controls toggle the block and the notes' text
 					// mode; the rest of the header is the card's own chrome.
 					if (event.y === last.headerRow) {
-						if (inside(last.collapseSpan, event.x)) {
+						if (firstClick && inside(last.collapseSpan, event.x)) {
 							setRailCollapsed(!railView.collapsed);
 							return { handled: true, render: true };
 						}
-						if (inside(last.foldSpan, event.x)) {
-							setRailFolded(!railView.folded);
+						if (firstClick && inside(last.foldSpan, event.x)) {
+							setRailFolded(!railView.foldAll);
 							return { handled: true, render: true };
 						}
 						return { handled: true, render: false };
+					}
+					// A double click on the note the first click unfolded into the
+					// editor folds it back to its one line (L21). A draft typed in
+					// between is committed rather than dropped; the keyboard leaves
+					// with the editor, so no key lands in an invisible field.
+					if (!firstClick && editingId !== undefined) {
+						const id = editingId;
+						const text = editInput.getText();
+						foldNote(id, true);
+						if (text.trim().length > 0 && text !== current.notes.find((note) => note.id === id)?.text) void commitEdit(text);
+						else {
+							editingId = undefined;
+							widgetTui?.setFocus(null);
+							refresh();
+						}
+						return { handled: true, render: true };
 					}
 					// The editor block owns the keyboard: clicking it takes
 					// focus and positions the caret where the pointer is.
@@ -403,8 +445,10 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 						void sendNote(found.id);
 						return { handled: true, render: true };
 					}
-					// A click on the text of a pending note edits it inline; the
-					// cursor rides to the end of the existing text for natural typing.
+					// A click on the text of a pending note unfolds it (a folded row
+					// opens its full text, L21) and edits it inline; the cursor rides
+					// to the end of the existing text for natural typing.
+					foldNote(found.id, false);
 					editingId = found.id;
 					editInput.setText(found.text);
 					editInput.handleInput("\x1b[F");
@@ -422,7 +466,10 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				return {};
 			},
 			digest(): string {
-				return JSON.stringify([current, hoveredId, scroll.scrollTop, fieldScrollTop, railView, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
+				// A Map serializes as {}: the fold exceptions enter the digest as a
+				// list, or a fold change would not re-render the card.
+				const view = { ...railView, foldOverrides: [...railView.foldOverrides].sort((a, b) => a[0] - b[0]) };
+				return JSON.stringify([current, hoveredId, scroll.scrollTop, fieldScrollTop, view, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
 			},
 			invalidate(): void {
 				input.invalidate();

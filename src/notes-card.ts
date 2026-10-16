@@ -135,9 +135,11 @@ export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: numbe
  * the interactive card can hit-test the send glyph. Empty body for an empty
  * state — callers hide the widget instead. Pass hiddenNoteId while that note
  * is being edited inline: its rows are skipped and editSlot reports the row
- * where its editor belongs. */
-export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number, options: { folded?: boolean } = {}): NotesCardView {
-	const folded = options.folded === true;
+ * where its editor belongs. foldedIds names the individual notes rendered as
+ * one line (the per-note view state; the header control folds every note by
+ * naming them all). */
+export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number, options: { foldedIds?: ReadonlySet<number> } = {}): NotesCardView {
+	const foldedIds = options.foldedIds ?? new Set<number>();
 	const summary = notesSummary(state);
 	const pending = state.notes.filter((note) => note.status === NOTE_STATUS.PENDING);
 	const sent = state.notes.filter((note) => note.status === NOTE_STATUS.SENT);
@@ -150,11 +152,11 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 			return;
 		}
 		hits.push({ row: bodyRows.length, id: note.id });
-		bodyRows.push(...pendingRowLines(note, theme, inner, hoveredId, folded));
+		bodyRows.push(...pendingRowLines(note, theme, inner, hoveredId, foldedIds.has(note.id)));
 	};
 	if (state.notes.length <= NOTES_ROW_CAP) {
 		for (const note of pending) pushPending(note);
-		for (const note of sent) bodyRows.push(...sentRowLines(note, theme, inner, folded));
+		for (const note of sent) bodyRows.push(...sentRowLines(note, theme, inner, foldedIds.has(note.id)));
 	} else {
 		if (sent.length > 0) bodyRows.push(`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("muted", `${sent.length} sent`)}`);
 		const foldedRows = sent.length > 0 ? 1 : 0;

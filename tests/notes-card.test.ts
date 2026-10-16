@@ -76,12 +76,22 @@ describe("folded rows (S8)", () => {
 	it("buildNotesCard folds every note on request and keeps the hit map", () => {
 		const state = { notes: [pendingNote(1, "corta"), sentNote(2, "enviada corta")], nextId: 3 };
 		const plain = buildNotesCard(state, theme, inner);
-		const folded = buildNotesCard(state, theme, inner, undefined, undefined, { folded: true });
+		const folded = buildNotesCard(state, theme, inner, undefined, undefined, { foldedIds: new Set([1, 2]) });
 		assert.equal(folded.bodyRows.length, plain.bodyRows.length, "one-row notes fold to the same rows");
 		const long = { notes: [pendingNote(1, "una nota larguisima que se extiende mucho mas alla de una sola fila")], nextId: 2 };
 		assert.ok(buildNotesCard(long, theme, inner).bodyRows.length > 1);
-		assert.equal(buildNotesCard(long, theme, inner, undefined, undefined, { folded: true }).bodyRows.length, 1);
-		assert.deepEqual(buildNotesCard(long, theme, inner, undefined, undefined, { folded: true }).hits, [{ row: 0, id: 1 }]);
+		assert.equal(buildNotesCard(long, theme, inner, undefined, undefined, { foldedIds: new Set([1]) }).bodyRows.length, 1);
+		assert.deepEqual(buildNotesCard(long, theme, inner, undefined, undefined, { foldedIds: new Set([1]) }).hits, [{ row: 0, id: 1 }]);
+	});
+
+	it("folds only the notes the view names (L21)", () => {
+		const first = pendingNote(1, "una nota larguisima que se extiende mucho mas alla de una sola fila visible");
+		const second = pendingNote(2, "otra nota larguisima que tambien pasa de una sola fila visible del bloque");
+		const state = { notes: [first, second], nextId: 3 };
+		const view = buildNotesCard(state, theme, inner, undefined, undefined, { foldedIds: new Set([1]) });
+		assert.deepEqual(view.bodyRows.slice(0, 1), pendingRowLines(first, theme, inner, undefined, true), "the named note folds to one row");
+		assert.deepEqual(view.bodyRows.slice(1), pendingRowLines(second, theme, inner), "the other keeps its full text");
+		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 1, id: 2 }], "both rows stay clickable");
 	});
 
 	it("shows the first pending note when the block collapses", () => {
