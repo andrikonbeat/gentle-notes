@@ -545,9 +545,9 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 	/** Compact widget for regular mode: one card-styled line — title, the
 	 * expand/collapse control inline, counts and the last note's first words —
 	 * with the panel background like the Todos header, and a blank row of air
-	 * above and below so it reads apart from the chat input and the Todos;
-	 * expanded it grows into the bounded note list. Paints nothing while
-	 * empty. */
+	 * below so it reads apart from the chat input. No row above: pi already
+	 * draws one spacer ahead of the above-editor widget group (L28). Expanded
+	 * it grows into the bounded note list. Paints nothing while empty. */
 	const makeCompactRow = (theme: Theme): Component & { digest?(): string } => {
 		const cardTheme = theme as unknown as NotesCardTheme;
 		let collapsed = true;

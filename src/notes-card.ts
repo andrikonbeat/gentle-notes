@@ -308,10 +308,13 @@ export interface CompactNotesView {
 
 /** The compact notepad above the editor: one card-styled line — title, the
  * expand/collapse control inline, counts and the last note's first words —
- * with the panel's tone background, like the Todos header, and a blank row
- * of air above and below so the widget never reads as glued to the chat
- * input or the Todos (L23). Expanded it grows into the bounded note list
- * with the same send glyphs as the rail. */
+ * with the panel's tone background, like the Todos header, and one blank row
+ * of air below so the widget never reads as glued to the chat input (L23,
+ * L28). No row above: pi already draws a spacer ahead of the whole
+ * above-editor widget group, and the Todos card ends with its own blank row,
+ * so a leading row here stacked two empty lines between the two headers.
+ * Expanded it grows into the bounded note list with the same send glyphs as
+ * the rail. */
 export function buildCompactNotesRow(
 	state: NotesState,
 	theme: NotesCardTheme,
@@ -341,13 +344,15 @@ export function buildCompactNotesRow(
 	const last = state.notes[state.notes.length - 1];
 	const preview = last && previewRoom >= 4 ? ` — ${truncateToWidth(sanitizeNoteText(last.text), previewRoom - 3, "…")}` : "";
 	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle: `${counts}${preview}`, body: [], tone: CARD_TONE.INFO, glyph: "" };
-	// The blank rows of air keep the widget off the chat input below and the
-	// Todos above; every hit-test index shifts with them.
+	// One blank row of air below keeps the widget off the chat input. No row
+	// above: pi already draws a single spacer ahead of the whole above-editor
+	// widget group, and the Todos card ends with its own blank row, so a
+	// leading row here stacked two empty lines between the two headers (L28).
 	const spaced = (rows: string[], headerRow: number, hits: NotesCardHit[], bodyTotal: number): CompactNotesView => ({
-		rows: ["", ...rows, ""],
-		headerRow: headerRow + 1,
+		rows: [...rows, ""],
+		headerRow,
 		control: span,
-		hits: hits.map((hit) => ({ ...hit, row: hit.row + 1 })),
+		hits,
 		bodyTotal,
 	});
 	if (options.collapsed) {

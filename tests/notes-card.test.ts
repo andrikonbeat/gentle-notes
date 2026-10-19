@@ -358,13 +358,27 @@ describe("buildCompactNotesRow", () => {
 		assert.deepEqual(view.hits, []);
 	});
 
+	it("keeps one row of air below and none above, since pi spaces the widget group (L28)", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
+		const collapsed = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: true });
+		assert.ok(collapsed.rows[0]?.includes("Notes"), `the header sits on the first row: ${JSON.stringify(collapsed.rows)}`);
+		assert.equal(collapsed.rows.at(-1), "", "one blank row below keeps it off the editor");
+		assert.equal(collapsed.headerRow, 0, `the header row follows the dropped leading air: ${collapsed.headerRow}`);
+		const expanded = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: false });
+		// The float panel paints its own tone-filled padding row above the
+		// header; that belongs to the card, not to the gap between widgets.
+		assert.notEqual(expanded.rows[0], "", `the panel paints no bare blank row above: ${JSON.stringify(expanded.rows[0])}`);
+		assert.equal(expanded.headerRow, 1, `the panel keeps its own padding row: ${expanded.headerRow}`);
+		assert.ok(expanded.rows[expanded.headerRow]?.includes("Notes"), `the expanded header sits on its header row: ${JSON.stringify(expanded.rows.slice(0, 3))}`);
+		assert.equal(expanded.rows.at(-1), "", "one blank row below keeps it off the editor");
+	});
+
 	it("collapsed paints one card-styled line: air around, control inline, preview trailing", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
 		const view = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: true });
-		assert.equal(view.rows.length, 3, `a blank row of air above and below: ${view.rows.length}`);
-		assert.equal(view.rows[0], "");
-		assert.equal(view.rows[2], "");
-		const row = view.rows[1]!;
+		assert.equal(view.rows.length, 2, `the header plus one blank row below: ${view.rows.length}`);
+		assert.equal(view.rows[1], "");
+		const row = view.rows[0]!;
 		assert.ok(!row.includes("✉"), `the header drops the notes glyph: ${row}`);
 		assert.ok(row.includes("Notes"), `title paints: ${row}`);
 		assert.ok(row.includes("▸ Expand"), `control inline after the title: ${row}`);
@@ -372,7 +386,7 @@ describe("buildCompactNotesRow", () => {
 		assert.ok(row.includes("— tres"), `the last note trails the counts: ${row}`);
 		assert.ok(row.startsWith(" \x1b[48;5;22m"), `tone background behind the line: ${row}`);
 		assert.deepEqual(view.control, { start: 10, end: 17 });
-		assert.equal(view.headerRow, 1);
+		assert.equal(view.headerRow, 0);
 		assert.deepEqual(view.hits, []);
 	});
 
@@ -382,7 +396,7 @@ describe("buildCompactNotesRow", () => {
 		state = unwrap(addNote(state, "corta", 1)).state;
 		state = unwrap(addNote(state, "una nota larguisima que se extiende mucho mas alla de una sola fila visible del bloque", 2)).state;
 		const view = buildCompactNotesRow(state, floatTheme, 60, { collapsed: true });
-		const row = view.rows[1]!;
+		const row = view.rows[0]!;
 		assert.ok(row.includes("2 pend · 0 sent"), `counts always paint: ${row}`);
 		assert.ok(row.includes("— una nota"), `the preview opens with the note: ${row}`);
 		assert.ok(row.includes("…"), `a clipped preview marks the cut: ${row}`);
@@ -394,8 +408,8 @@ describe("buildCompactNotesRow", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
 		let state = emptyNotes();
 		state = unwrap(addNote(state, "una nota larguisima que se extiende mucho mas alla de una sola fila visible", 1)).state;
-		const narrow = buildCompactNotesRow(state, floatTheme, 46, { collapsed: true }).rows[1]!;
-		const wide = buildCompactNotesRow(state, floatTheme, 80, { collapsed: true }).rows[1]!;
+		const narrow = buildCompactNotesRow(state, floatTheme, 46, { collapsed: true }).rows[0]!;
+		const wide = buildCompactNotesRow(state, floatTheme, 80, { collapsed: true }).rows[0]!;
 		assert.ok(wide.includes("larguisima"), `the wide window shows more words: ${wide}`);
 		assert.ok(!narrow.includes("larguisima"), `the narrow window clips earlier: ${narrow}`);
 		assert.ok(narrow.includes("— una"), `even the narrow window previews something: ${narrow}`);
@@ -404,29 +418,28 @@ describe("buildCompactNotesRow", () => {
 	it("collapses to the bare chevron on narrow rows and keeps it clickable", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
 		const view = buildCompactNotesRow(mixedState(), floatTheme, 20, { collapsed: true });
-		assert.equal(view.rows.length, 3);
-		assert.ok(view.rows[1]?.includes("▸"), `chevron survives the clip: ${view.rows[1]}`);
-		assert.ok(!view.rows[1]?.includes("Expand"), "the label drops when narrow");
+		assert.equal(view.rows.length, 2);
+		assert.ok(view.rows[0]?.includes("▸"), `chevron survives the clip: ${view.rows[0]}`);
+		assert.ok(!view.rows[0]?.includes("Expand"), "the label drops when narrow");
 		assert.deepEqual(view.control, { start: 10, end: 10 }, "the visible chevron stays hit-testable");
 	});
 
 	it("paints the control with the hover role while the pointer is on it", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
 		const view = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: true, controlHovered: true });
-		assert.ok(view.rows[1]?.includes("\x1b[38;5;214m▸ Expand\x1b[0m"), `hover role paints: ${view.rows[1]}`);
+		assert.ok(view.rows[0]?.includes("\x1b[38;5;214m▸ Expand\x1b[0m"), `hover role paints: ${view.rows[0]}`);
 	});
 
 	it("expanded grows into the bounded list with the collapse control and hits", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
 		const view = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: false });
 		assert.ok(view.rows.length > 1);
-		assert.equal(view.rows[0], "");
 		assert.equal(view.rows.at(-1), "");
-		assert.equal(view.headerRow, 2);
-		assert.ok(view.rows[2]?.includes("▾ Collapse"), `header control flips: ${view.rows[2]}`);
+		assert.equal(view.headerRow, 1);
+		assert.ok(view.rows[1]?.includes("▾ Collapse"), `header control flips: ${view.rows[1]}`);
 		assert.deepEqual(view.control, { start: 10, end: 19 });
-		assert.ok(view.rows[4]?.includes("uno"), `the list begins under the header: ${view.rows[4]}`);
-		assert.deepEqual(view.hits, [{ row: 4, id: 1 }, { row: 5, id: 3 }]);
+		assert.ok(view.rows[3]?.includes("uno"), `the list begins under the header: ${view.rows[3]}`);
+		assert.deepEqual(view.hits, [{ row: 3, id: 1 }, { row: 4, id: 3 }]);
 	});
 
 	it("expanded windows the list at the row cap and reports it as a scroll range", () => {
@@ -448,9 +461,9 @@ describe("buildCompactNotesRow", () => {
 		const view = buildCompactNotesRow(state, floatTheme, 60, { collapsed: false, scrollTop: 2 });
 		assert.ok(view.rows.some((line) => line.includes("↑↓ 3–10/10")), `the hint follows the window: ${view.rows.join(" | ")}`);
 		assert.equal(view.hits.length, 8);
-		assert.deepEqual(view.hits[0], { row: 4, id: 3 });
-		assert.deepEqual(view.hits[7], { row: 11, id: 10 });
-		assert.ok(view.rows[4]?.includes("nota 3"), `the window starts at the scrolled note: ${view.rows[4]}`);
+		assert.deepEqual(view.hits[0], { row: 3, id: 3 });
+		assert.deepEqual(view.hits[7], { row: 10, id: 10 });
+		assert.ok(view.rows[3]?.includes("nota 3"), `the window starts at the scrolled note: ${view.rows[3]}`);
 		const clamped = buildCompactNotesRow(state, floatTheme, 60, { collapsed: false, scrollTop: 99 });
 		assert.ok(clamped.rows.some((line) => line.includes("↑↓ 3–10/10")), `scrollTop clamps to the last window: ${clamped.rows.join(" | ")}`);
 	});
@@ -458,12 +471,11 @@ describe("buildCompactNotesRow", () => {
 	it("outlined styles fall back to the collapsed panel without a hit span", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "neon";
 		const collapsed = buildCompactNotesRow(mixedState(), theme, 60, { collapsed: true });
-		assert.equal(collapsed.rows.length, 4);
-		assert.equal(collapsed.rows[0], "");
-		assert.ok(collapsed.rows[1]?.includes("Notes"), `title paints in the frame: ${collapsed.rows[1]}`);
+		assert.equal(collapsed.rows.length, 3);
+		assert.ok(collapsed.rows[0]?.includes("Notes"), `title paints in the frame: ${collapsed.rows[0]}`);
 		assert.equal(collapsed.control, undefined);
 		const expanded = buildCompactNotesRow(mixedState(), theme, 60, { collapsed: false });
-		assert.ok(expanded.rows.length > 3, "the list paints inside the frame");
-		assert.deepEqual(expanded.hits, [{ row: 2, id: 1 }, { row: 3, id: 3 }]);
+		assert.ok(expanded.rows.length > 2, "the list paints inside the frame");
+		assert.deepEqual(expanded.hits, [{ row: 1, id: 1 }, { row: 2, id: 3 }]);
 	});
 });
