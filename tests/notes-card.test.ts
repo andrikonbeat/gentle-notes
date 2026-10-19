@@ -10,6 +10,7 @@ import {
 	buildCompactNotesRow,
 	collapsedNoteRow,
 	controlSpan,
+	deleteGlyphColumn,
 	railControlText,
 	pendingRowLines,
 	sanitizeNoteText,
@@ -182,20 +183,56 @@ describe("pendingRowLines", () => {
 	it("renders one line with the send affordance right-aligned", () => {
 		const lines = pendingRowLines(pendingNote(1, "hola"), theme, 46);
 		assert.deepEqual(lines, [
-			`<accent>✉</accent>  <text>${"hola".padEnd(40)}</text>  <muted>➤</muted>`,
+			`<accent>✉</accent>  <text>${"hola".padEnd(37)}</text>  <muted>➤</muted>  <muted>×</muted>`,
 		]);
 	});
 
 	it("wraps long notes and puts the send glyph only on the first line", () => {
 		const lines = pendingRowLines(pendingNote(1, "uno dos tres cuatro cinco seis siete"), theme, 14);
 		assert.deepEqual(lines, [
-			`<accent>✉</accent>  <text>${"uno dos".padEnd(8)}</text>  <muted>➤</muted>`,
+			`<accent>✉</accent>  <text>${"uno".padEnd(5)}</text>  <muted>➤</muted>  <muted>×</muted>`,
+			`   <text>dos</text>`,
 			`   <text>tres</text>`,
-			`   <text>cuatro</text>`,
+			`   <text>cuatr</text>`,
+			`   <text>o</text>`,
 			`   <text>cinco</text>`,
 			`   <text>seis</text>`,
 			`   <text>siete</text>`,
 		]);
+	});
+});
+
+describe("delete affordance (L27)", () => {
+	// Geometry needs real ANSI escapes: tag fakes inflate visibleWidth and
+	// spread the glyph columns apart (L8, applied again).
+	const ansiTheme: NotesCardTheme = {
+		fg: (role, text) => `\x1b[38;5;${role === "accent" ? 205 : role === "muted" ? 242 : 255}m${text}\x1b[0m`,
+		strikethrough: (text) => `\x1b[9m${text}\x1b[29m`,
+	};
+
+	it("paints the delete glyph after the send glyph with two columns of air", () => {
+		const row = pendingRowLines(pendingNote(1, "corta"), ansiTheme, 46)[0]!;
+		const send = sendGlyphColumn(row);
+		const del = deleteGlyphColumn(row);
+		assert.ok(send !== undefined && del !== undefined, `both glyphs paint: ${row}`);
+		assert.equal((del as number) - (send as number), 3, `air between the glyphs: send ${send}, delete ${del}`);
+		assert.ok(row.includes("\x1b[38;5;242m×\x1b[0m"), `the delete glyph paints muted: ${JSON.stringify(row)}`);
+	});
+
+	it("keeps both glyph columns where the unfolded row had them", () => {
+		const note = pendingNote(2, "una nota larguisima que se extiende mucho mas alla de una sola fila visible");
+		const unfolded = pendingRowLines(note, ansiTheme, 40)[0]!;
+		const folded = pendingRowLines(note, ansiTheme, 40, undefined, true)[0]!;
+		assert.equal(sendGlyphColumn(folded), sendGlyphColumn(unfolded));
+		assert.equal(deleteGlyphColumn(folded), deleteGlyphColumn(unfolded));
+	});
+
+	it("paints the delete glyph with the hover role while the pointer is on it", () => {
+		const idle = pendingRowLines(pendingNote(3, "corta"), ansiTheme, 46)[0]!;
+		assert.ok(idle.includes("\x1b[38;5;242m×\x1b[0m"), `idle paints muted: ${JSON.stringify(idle)}`);
+		const hovered = pendingRowLines(pendingNote(3, "corta"), ansiTheme, 46, undefined, false, 3)[0]!;
+		assert.ok(hovered.includes("\x1b[38;5;205m×\x1b[0m"), `hover paints the accent role: ${JSON.stringify(hovered)}`);
+		assert.ok(hovered.includes("\x1b[38;5;242m➤\x1b[0m"), "the send glyph keeps its idle role");
 	});
 });
 
@@ -232,8 +269,8 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 		state = unwrap(addNote(state, "cc", 3)).state;
 		const view = buildNotesCard(state, theme, 46);
 		assert.deepEqual(view.bodyRows, [
-			`<accent>✉</accent>  <text>${"aa".padEnd(40)}</text>  <muted>➤</muted>`,
-			`<accent>✉</accent>  <text>${"cc".padEnd(40)}</text>  <muted>➤</muted>`,
+			`<accent>✉</accent>  <text>${"aa".padEnd(37)}</text>  <muted>➤</muted>  <muted>×</muted>`,
+			`<accent>✉</accent>  <text>${"cc".padEnd(37)}</text>  <muted>➤</muted>  <muted>×</muted>`,
 			`<success>✓</success>  <dim>~~bb~~</dim>`,
 		]);
 		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 1, id: 3 }]);
@@ -248,7 +285,7 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 		const view = buildNotesCard(state, theme, 40);
 		assert.equal(view.bodyRows.length, 18);
 		assert.equal(view.bodyRows[0], `<success>✓</success>  <muted>3 sent</muted>`);
-		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"p1".padEnd(34)}</text>  <muted>➤</muted>`);
+		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"p1".padEnd(31)}</text>  <muted>➤</muted>  <muted>×</muted>`);
 		assert.equal(view.bodyRows[view.bodyRows.length - 1], `<muted>… 5 more</muted>`);
 		assert.equal(view.hits.length, 16);
 		assert.deepEqual(view.hits[0], { row: 1, id: 1 });
@@ -261,8 +298,11 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 			nextId: 3,
 		};
 		const view = buildNotesCard(state, theme, 14);
-		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 6, id: 2 }]);
-		assert.equal(view.bodyRows.length, 7);
+		// The delete affordance spends three more columns (L27), so the wrap
+		// width drops to five: the long note folds into eight lines and the
+		// second note starts at row 8.
+		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 8, id: 2 }]);
+		assert.equal(view.bodyRows.length, 9);
 	});
 
 	it("paints the send glyph accent on the hovered row only", () => {
@@ -270,8 +310,8 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 		state = unwrap(addNote(state, "aa", 1)).state;
 		state = unwrap(addNote(state, "bb", 2)).state;
 		const view = buildNotesCard(state, theme, 46, 2);
-		assert.equal(view.bodyRows[0], `<accent>✉</accent>  <text>${"aa".padEnd(40)}</text>  <muted>➤</muted>`);
-		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"bb".padEnd(40)}</text>  <accent>➤</accent>`);
+		assert.equal(view.bodyRows[0], `<accent>✉</accent>  <text>${"aa".padEnd(37)}</text>  <muted>➤</muted>  <muted>×</muted>`);
+		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"bb".padEnd(37)}</text>  <accent>➤</accent>  <muted>×</muted>`);
 	});
 });
 

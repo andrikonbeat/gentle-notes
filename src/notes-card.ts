@@ -23,6 +23,10 @@ export type NoteStatusKey = keyof typeof NOTE_GLYPH;
 /** Hoverable send affordance drawn at the end of a pending rail row. */
 export const SEND_GLYPH = "➤";
 
+/** Per-row delete affordance after the send glyph (L27); muted, accent while
+ * hovered — same grammar as the send glyph. */
+export const DELETE_GLYPH = "×";
+
 /** Above this many notes the body folds: sent notes collapse into "✓ N sent"
  * and the pending tail into "… K more" (TODO grammar). Scaled to the taller
  * rail card (L24): half the screen shows ~19 body rows, so the list folds at
@@ -101,19 +105,22 @@ function foldedText(first: string, rest: readonly string[], width: number): stri
 }
 
 /** Pending rail row: ✉ glyph, air, text padded to the right edge, air, ➤ send
- * affordance (accent while hovered, muted otherwise); wrapped continuations
- * indent to the text column. */
-export function pendingRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, hoveredId?: number, folded = false): string[] {
-	const width = Math.max(1, inner - GLYPH_GAP * 2 - 2);
+ * affordance (accent while hovered, muted otherwise), air, ✕ delete affordance
+ * (L27, same hover grammar); wrapped continuations indent to the text column. */
+export function pendingRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, hoveredId?: number, folded = false, deleteHoveredId?: number): string[] {
+	// Three glyphs flank the text — status lead, send affordance, delete
+	// affordance — each keeping its two columns of air (L11, L27).
+	const width = Math.max(1, inner - GLYPH_GAP * 3 - 3);
 	const segments = wrapNoteText(sanitizeNoteText(note.text), width);
 	const [first = "", ...rest] = segments;
 	const sendRole = hoveredId === note.id ? "accent" : "muted";
+	const deleteRole = deleteHoveredId === note.id ? "accent" : "muted";
 	// Folded the note keeps one row: the first line, ellipsized when the note
 	// goes on, padded to the text column so the send glyph holds its place and
 	// the click target lands where the unfolded row had it.
 	const head = folded ? foldedText(first, rest, width).padEnd(width) : first.padEnd(width);
 	const lines = [
-		`${theme.fg("accent", NOTE_GLYPH.pending)}${" ".repeat(GLYPH_GAP)}${theme.fg("text", head)}${" ".repeat(GLYPH_GAP)}${theme.fg(sendRole, SEND_GLYPH)}`,
+		`${theme.fg("accent", NOTE_GLYPH.pending)}${" ".repeat(GLYPH_GAP)}${theme.fg("text", head)}${" ".repeat(GLYPH_GAP)}${theme.fg(sendRole, SEND_GLYPH)}${" ".repeat(GLYPH_GAP)}${theme.fg(deleteRole, DELETE_GLYPH)}`,
 	];
 	if (folded) return lines;
 	for (const segment of rest) lines.push(`${" ".repeat(GLYPH_GAP + 1)}${theme.fg("text", segment)}`);
@@ -141,7 +148,7 @@ export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: numbe
  * where its editor belongs. foldedIds names the individual notes rendered as
  * one line (the per-note view state; the header control folds every note by
  * naming them all). */
-export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number, options: { foldedIds?: ReadonlySet<number> } = {}): NotesCardView {
+export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number, options: { foldedIds?: ReadonlySet<number>; hoveredDeleteId?: number } = {}): NotesCardView {
 	const foldedIds = options.foldedIds ?? new Set<number>();
 	const summary = notesSummary(state);
 	const pending = state.notes.filter((note) => note.status === NOTE_STATUS.PENDING);
@@ -155,7 +162,7 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 			return;
 		}
 		hits.push({ row: bodyRows.length, id: note.id });
-		bodyRows.push(...pendingRowLines(note, theme, inner, hoveredId, foldedIds.has(note.id)));
+		bodyRows.push(...pendingRowLines(note, theme, inner, hoveredId, foldedIds.has(note.id), options.hoveredDeleteId));
 	};
 	if (state.notes.length <= NOTES_ROW_CAP) {
 		for (const note of pending) pushPending(note);
@@ -202,12 +209,12 @@ export function railControlText(options: { collapsed: boolean; folded: boolean; 
 const ANSI_OR_CONTROL = /^\x1b\[[0-9;?]*[A-Za-z]/;
 
 /**
- * Visible column (0-based) where the send glyph starts in a rendered row,
- * skipping ANSI escape sequences; undefined when the row has no send glyph.
+ * Visible column (0-based) where a glyph starts in a rendered row, skipping
+ * ANSI escape sequences; undefined when the row has no such glyph.
  * Hit-testing reads the glyph position off the rendered line itself, so the
  * click target stays correct in every card style.
  */
-export function sendGlyphColumn(line: string): number | undefined {
+function glyphColumnOf(line: string, glyph: string): number | undefined {
 	let column = 0;
 	let index = 0;
 	while (index < line.length) {
@@ -220,11 +227,23 @@ export function sendGlyphColumn(line: string): number | undefined {
 		}
 		const codePoint = line.codePointAt(index) as number;
 		const character = String.fromCodePoint(codePoint);
-		if (character === SEND_GLYPH) return column;
+		if (character === glyph) return column;
 		column += visibleWidth(character);
 		index += character.length;
 	}
 	return undefined;
+}
+
+/** Visible column (0-based) where the send glyph starts in a rendered row;
+ * undefined when the row has no send glyph. */
+export function sendGlyphColumn(line: string): number | undefined {
+	return glyphColumnOf(line, SEND_GLYPH);
+}
+
+/** Visible column (0-based) where the row's delete affordance starts (L27);
+ * undefined when the row has no delete glyph. */
+export function deleteGlyphColumn(line: string): number | undefined {
+	return glyphColumnOf(line, DELETE_GLYPH);
 }
 
 /**
@@ -297,7 +316,7 @@ export function buildCompactNotesRow(
 	state: NotesState,
 	theme: NotesCardTheme,
 	width: number,
-	options: { collapsed: boolean; controlHovered?: boolean; hoveredId?: number },
+	options: { collapsed: boolean; controlHovered?: boolean; hoveredId?: number; hoveredDeleteId?: number },
 ): CompactNotesView {
 	if (state.notes.length === 0) return { rows: [], headerRow: 0, hits: [], bodyTotal: 0 };
 	const summary = notesSummary(state);
@@ -334,7 +353,7 @@ export function buildCompactNotesRow(
 	if (options.collapsed) {
 		return spaced(renderPanelHeaderLine(card, theme, width), 0, [], 0);
 	}
-	const view = buildNotesCard(state, theme, panelInnerWidth(theme, width), options.hoveredId);
+	const view = buildNotesCard(state, theme, panelInnerWidth(theme, width), options.hoveredId, undefined, { hoveredDeleteId: options.hoveredDeleteId });
 	const total = view.bodyRows.length;
 	// The expanded list windows itself like the rail's body (L26): the wheel
 	// scrolls it and the hint reports the range, so a long backlog is

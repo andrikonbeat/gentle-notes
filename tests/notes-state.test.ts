@@ -4,6 +4,7 @@ import {
 	NOTE_STATUS,
 	addNote,
 	clearNotes,
+	deleteNote,
 	emptyNotes,
 	isNotesState,
 	markSent,
@@ -113,6 +114,24 @@ describe("clearNotes", () => {
 		const result = clearNotes(state);
 		assert.deepEqual(result.state, emptyNotes());
 		assert.equal(result.removed, 2);
+	});
+});
+
+describe("deleteNote", () => {
+	it("removes the named note, pending or sent, and leaves the rest untouched", () => {
+		let state = emptyNotes();
+		state = unwrap(addNote(state, "primera", 1)).state;
+		state = unwrap(addNote(state, "segunda", 2)).state;
+		state = unwrap(markSent(state, 2, 3)).state;
+		const after = unwrap(deleteNote(state, 2));
+		assert.deepEqual(after.state.notes.map((note) => note.id), [1], "the sent note deletes");
+		assert.equal(after.state.nextId, 3, "ids never rewind");
+		const alsoPending = unwrap(deleteNote(after.state, 1));
+		assert.deepEqual(alsoPending.state.notes, [], "the pending note deletes too");
+	});
+
+	it("refuses an unknown id", () => {
+		assert.equal(deleteNote(emptyNotes(), 99), "no note #99");
 	});
 });
 

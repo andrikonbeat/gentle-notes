@@ -79,8 +79,8 @@ describe("buildNotesCard hits", () => {
 			nextId: 3,
 		};
 		const view = buildNotesCard(state, theme, 14);
-		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 6, id: 2 }]);
-		assert.equal(view.bodyRows.length, 7);
+		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 8, id: 2 }]);
+		assert.equal(view.bodyRows.length, 9);
 	});
 
 	it("only maps the pending notes that survive folding", () => {
@@ -100,7 +100,7 @@ describe("buildNotesCard hiddenNoteId (inline edit slot)", () => {
 		state = unwrap(addNote(state, "aa", 1)).state;
 		state = unwrap(addNote(state, "bb", 2)).state;
 		const view = buildNotesCard(state, theme, 46, undefined, 1);
-		assert.deepEqual(view.bodyRows, [`<accent>✉</accent>  <text>${"bb".padEnd(40)}</text>  <muted>➤</muted>`]);
+		assert.deepEqual(view.bodyRows, [`<accent>✉</accent>  <text>${"bb".padEnd(37)}</text>  <muted>➤</muted>  <muted>×</muted>`]);
 		assert.deepEqual(view.hits, [{ row: 0, id: 2 }]);
 		assert.equal(view.editSlot, 0);
 		assert.deepEqual(view.summary, { pending: 2, sent: 0, total: 2 });
@@ -130,7 +130,7 @@ describe("buildNotesCard hover", () => {
 		state = unwrap(addNote(state, "aa", 1)).state;
 		state = unwrap(addNote(state, "bb", 2)).state;
 		const view = buildNotesCard(state, theme, 46, 2);
-		assert.equal(view.bodyRows[0], `<accent>✉</accent>  <text>${"aa".padEnd(40)}</text>  <muted>➤</muted>`);
-		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"bb".padEnd(40)}</text>  <accent>➤</accent>`);
+		assert.equal(view.bodyRows[0], `<accent>✉</accent>  <text>${"aa".padEnd(37)}</text>  <muted>➤</muted>  <muted>×</muted>`);
+		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"bb".padEnd(37)}</text>  <accent>➤</accent>  <muted>×</muted>`);
 	});
 });

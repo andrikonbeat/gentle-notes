@@ -7,9 +7,9 @@
 import type { Component, EditorTheme, KeyId, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { CURSOR_MARKER, Editor, ScrollView, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { NOTE_STATUS, addNote, clearNotes, emptyNotes, markSent, notesSummary, updateNoteText, type NotesState } from "./notes-state.ts";
+import { NOTE_STATUS, addNote, clearNotes, deleteNote, emptyNotes, markSent, notesSummary, updateNoteText, type NotesState } from "./notes-state.ts";
 import { loadNotes, mutateNotes } from "./storage.ts";
-import { buildCompactNotesRow, buildNotesCard, collapsedNoteRow, COMPACT_ROW_CAP, controlSpan, railControlText, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
+import { buildCompactNotesRow, buildNotesCard, collapsedNoteRow, COMPACT_ROW_CAP, controlSpan, deleteGlyphColumn, railControlText, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
 import { CARD_GLYPH, CARD_TONE, paintPanelRows, panelBodyLine, panelBodyWidth, panelContentColumn, panelFloatApplies, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
 import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
 
@@ -31,13 +31,13 @@ const RAIL_HINT = "alt+n";
 const RAIL_BODY_CAP = 24;
 
 const HELP = [
-	"Usage: /notes [add <text> | send [<id>] | list | clear | collapse | expand | fold | unfold]",
+	"Usage: /notes [add <text> | send [<id>] | list | clear | delete [<id>] | collapse | expand | fold | unfold]",
 	"alt+n opens the notes manager; click ➤ on a rail row to send it to the chat.",
 	"Click a note's text to edit it; double click folds it back to its first line.",
 ].join("\n");
 
 export interface NotesArgs {
-	action: "manage" | "add" | "send" | "list" | "clear" | "help" | "collapse" | "expand" | "fold" | "unfold";
+	action: "manage" | "add" | "send" | "list" | "clear" | "help" | "collapse" | "expand" | "fold" | "unfold" | "delete";
 	rest: string;
 	id?: number;
 }
@@ -60,6 +60,11 @@ export function parseNotesArgs(args: string): NotesArgs {
 			return { action: "list", rest: payload };
 		case "clear":
 			return { action: "clear", rest: payload };
+		case "delete": {
+			const first = rest[0];
+			const id = first !== undefined && /^\d+$/.test(first) ? Number.parseInt(first, 10) : undefined;
+			return { action: "delete", rest: payload, id };
+		}
 		case "collapse":
 			return { action: "collapse", rest: payload };
 		case "expand":
@@ -110,6 +115,10 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		collapseHovered: false,
 		foldHovered: false,
 	};
+
+	// The note whose delete glyph the pointer is on (D15): hover repaints
+	// the accent role, the digest carries it, a click removes the note.
+	let deleteHoveredId: number | undefined;
 
 	/** The notes rendered as one line right now: the mode, plus its exceptions. */
 	const foldedIdSet = (): Set<number> => new Set(current.notes.filter((note) => railView.foldOverrides.get(note.id) ?? railView.foldAll).map((note) => note.id));
@@ -168,6 +177,12 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		await apply((state) => markSent(state, id, Date.now()), `Note #${id} sent to the chat${suffix}`);
 	};
 
+	/** Remove one note for good — the only hard delete. Ids never rewind, so
+	 * a note added later never reuses a deleted id. */
+	const deleteOne = async (id: number): Promise<void> => {
+		await apply((state) => deleteNote(state, id), `Note #${id} deleted`);
+	};
+
 	const saveNote = async (text: string): Promise<void> => {
 		await apply((state) => addNote(state, text, Date.now()), "Note saved");
 	};
@@ -211,7 +226,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		let inputTick = 0;
 		// First visible row of the field's own window (see the render path).
 		let fieldScrollTop = 0;
-		let lastRender: { output: string[]; headRows: number; headerRow: number; collapseSpan: { start: number; end: number } | undefined; foldSpan: { start: number; end: number } | undefined; fieldTop: number; editorRows: number; notesStart: number; contentColumn: number; editStart: number | undefined; editRows: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
+		let lastRender: { output: string[]; headRows: number; headerRow: number; collapseSpan: { start: number; end: number } | undefined; foldSpan: { start: number; end: number } | undefined; deleteSpan: { start: number; end: number } | undefined; fieldTop: number; editorRows: number; notesStart: number; contentColumn: number; editStart: number | undefined; editRows: number; visibleRows: number; scrollTop: number; hits: NotesCardHit[] } | undefined;
 
 		const commitEdit = async (text: string): Promise<void> => {
 			const id = editingId;
@@ -250,7 +265,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// shows no field at all.
 				input.focused = self.focused && editingId === undefined && !railView.collapsed;
 				editInput.focused = self.focused && editingId !== undefined && !railView.collapsed;
-				const view = buildNotesCard(current, cardTheme, inner, hoveredId, editingId, { foldedIds: foldedIdSet() });
+				const view = buildNotesCard(current, cardTheme, inner, hoveredId, editingId, { foldedIds: foldedIdSet(), hoveredDeleteId: deleteHoveredId });
 				const subtitle = `${view.summary.pending} pend · ${view.summary.sent} sent`;
 				// Both control labels show while the header holds them and the
 				// subtitle unclipped; below that the chevrons stand alone.
@@ -326,12 +341,26 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				const headerLine = lines[headerRow] ?? "";
 				const collapseSpan = controlSpan(headerLine, controls.collapse);
 				const foldSpan = controlSpan(headerLine, controls.fold, collapseSpan ? collapseSpan.end + 1 : 0);
+				// Every pending row pads its text to the same width, so the ×
+				// sits at one column for all of them: one visible row tells the
+				// click map where they all are, with the send glyph's tolerance.
+				let deleteSpan: { start: number; end: number } | undefined;
+				if (!railView.collapsed) {
+					for (const row of visible) {
+						const column = deleteGlyphColumn(row);
+						if (column !== undefined) {
+							deleteSpan = { start: column - 1, end: column + 1 };
+							break;
+						}
+					}
+				}
 				lastRender = {
 					output,
 					headRows,
 					headerRow,
 					collapseSpan,
 					foldSpan,
+					deleteSpan,
 					fieldTop: fieldScrollTop,
 					editorRows: fieldRows.length,
 					contentColumn: panelContentColumn(cardTheme, width, tone),
@@ -394,8 +423,10 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					}
 					const found = rowHitAt(event.y);
 					const next = found && found.column !== undefined && Math.abs(event.x - found.column) <= SEND_HIT_TOLERANCE ? found.id : undefined;
-					if (next === hoveredId) return { handled: true, render: false };
+					const nextDelete = found && last?.deleteSpan !== undefined && inside(last.deleteSpan, event.x) ? found.id : undefined;
+					if (next === hoveredId && nextDelete === deleteHoveredId) return { handled: true, render: false };
 					hoveredId = next;
+					deleteHoveredId = nextDelete;
 					return { handled: true, render: true };
 				}
 				if (event.type === "click") {
@@ -404,6 +435,28 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					// first one toggles, so a double click never undoes what the
 					// click just did.
 					const firstClick = (event.clickCount ?? 1) <= 1;
+					// The delete glyph: a click on the × removes the note outright,
+					// before any fold or edit can claim the row.
+					if (last.deleteSpan !== undefined && inside(last.deleteSpan, event.x)) {
+						const found = rowHitAt(event.y);
+						if (found) {
+							void deleteOne(found.id);
+							return { handled: true, render: true };
+						}
+						return { handled: true, render: false };
+					}
+					// Double click on a pending note's text (when not editing)
+					// toggles its individual folded state (F15).
+					if (!firstClick && editingId === undefined && last.notesStart !== undefined && event.y >= last.notesStart && event.y < last.notesStart + last.visibleRows) {
+						const noteHit = last.hits.find((h) => h.row === event.y - last.notesStart + last.scrollTop);
+						if (noteHit) {
+							// Toggle: if it's already folded, unfold it; if unfolded, fold it.
+							const isFolded = railView.foldOverrides.get(noteHit.id) ?? railView.foldAll;
+							foldNote(noteHit.id, !isFolded);
+							refresh();
+							return { handled: true, render: true };
+						}
+					}
 					// The header controls toggle the block and the notes' text
 					// mode; the rest of the header is the card's own chrome.
 					if (event.y === last.headerRow) {
@@ -479,7 +532,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// A Map serializes as {}: the fold exceptions enter the digest as a
 				// list, or a fold change would not re-render the card.
 				const view = { ...railView, foldOverrides: [...railView.foldOverrides].sort((a, b) => a[0] - b[0]) };
-				return JSON.stringify([current, hoveredId, scroll.scrollTop, fieldScrollTop, view, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
+				return JSON.stringify([current, hoveredId, deleteHoveredId, scroll.scrollTop, fieldScrollTop, view, self.focused, editingId, inputTick, input.getText(), editInput.getText()]);
 			},
 			invalidate(): void {
 				input.invalidate();
@@ -500,17 +553,19 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		let collapsed = true;
 		let controlHovered = false;
 		let hoveredId: number | undefined;
+		// The note whose delete glyph the pointer is on (D15).
+		let hoveredDeleteId: number | undefined;
 		// First visible row of the expanded list's window (L26).
 		let scrollTop = 0;
 		let last: { rows: string[]; headerRow: number; control?: { start: number; end: number }; hits: NotesCardHit[]; bodyTotal: number } | undefined;
 		/** The pending note at a rendered row, with its send glyph column. */
-		const rowHitAt = (y: number): { id: number; column: number | undefined } | undefined => {
+		const rowHitAt = (y: number): { id: number; column: number | undefined; deleteColumn: number | undefined } | undefined => {
 			const view = last;
 			if (!view) return undefined;
 			const hit = view.hits.find((candidate) => candidate.row === y);
 			if (!hit) return undefined;
 			const line = view.rows[y];
-			return line !== undefined ? { id: hit.id, column: sendGlyphColumn(line) } : undefined;
+			return line !== undefined ? { id: hit.id, column: sendGlyphColumn(line), deleteColumn: deleteGlyphColumn(line) } : undefined;
 		};
 		return {
 			render(width: number): string[] {
@@ -518,7 +573,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					last = undefined;
 					return [];
 				}
-				last = buildCompactNotesRow(current, cardTheme, width, { collapsed, controlHovered, hoveredId, scrollTop });
+				last = buildCompactNotesRow(current, cardTheme, width, { collapsed, controlHovered, hoveredId, hoveredDeleteId, scrollTop });
 				// Keep the state where the render clamped it, so a shrunk backlog
 				// cannot leave the window past its end.
 				scrollTop = Math.max(0, Math.min(scrollTop, Math.max(0, last.bodyTotal - COMPACT_ROW_CAP)));
@@ -531,9 +586,11 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				if (event.type === "move" || event.type === "drag") {
 					const found = onControl ? undefined : rowHitAt(event.y);
 					const nextGlyph = found && found.column !== undefined && Math.abs(event.x - found.column) <= SEND_HIT_TOLERANCE ? found.id : undefined;
-					if (onControl === controlHovered && nextGlyph === hoveredId) return { handled: true, render: false };
+					const nextDelete = found && found.deleteColumn !== undefined && Math.abs(event.x - found.deleteColumn) <= SEND_HIT_TOLERANCE ? found.id : undefined;
+					if (onControl === controlHovered && nextGlyph === hoveredId && nextDelete === hoveredDeleteId) return { handled: true, render: false };
 					controlHovered = onControl;
 					hoveredId = nextGlyph;
+					hoveredDeleteId = nextDelete;
 					return { handled: true, render: true };
 				}
 				if (event.type === "click") {
@@ -543,6 +600,10 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 						return { handled: true, render: true };
 					}
 					const found = rowHitAt(event.y);
+					if (found && found.deleteColumn !== undefined && Math.abs(event.x - found.deleteColumn) <= SEND_HIT_TOLERANCE) {
+						void deleteOne(found.id);
+						return { handled: true, render: true };
+					}
 					if (found && found.column !== undefined && Math.abs(event.x - found.column) <= SEND_HIT_TOLERANCE) {
 						void sendNote(found.id);
 						return { handled: true, render: true };
@@ -561,7 +622,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				return {};
 			},
 			digest(): string {
-				return JSON.stringify([current, collapsed, controlHovered, hoveredId, scrollTop]);
+				return JSON.stringify([current, collapsed, controlHovered, hoveredId, hoveredDeleteId, scrollTop]);
 			},
 			invalidate(): void {},
 		};
@@ -654,6 +715,10 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					return;
 				case "clear":
 					if (!ctx.hasUI || (await ctx.ui.confirm("Clear all notes", "Remove every note, pending and sent?"))) await clearAll();
+					return;
+				case "delete":
+					if (parsed.id !== undefined) await deleteOne(parsed.id);
+					else await openManager(ctx);
 					return;
 				case "collapse":
 					setRailCollapsed(true);

@@ -18,7 +18,7 @@ import gentleNotes from "../src/extension.ts";
 import { sidebarState } from "../src/sidebar-interop.ts";
 import { loadNotes } from "../src/storage.ts";
 import { NOTE_STATUS } from "../src/notes-state.ts";
-import { controlSpan } from "../src/notes-card.ts";
+import { controlSpan, deleteGlyphColumn } from "../src/notes-card.ts";
 import { sendGlyphColumn } from "../src/notes-card.ts";
 
 const MANAGER_ADD = "＋ Add a note…";
@@ -328,6 +328,25 @@ describe("gentle-notes extension wiring", () => {
 		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.SENT);
 	});
 
+	it("deletes a note from the compact list's delete glyph (D15)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add del compacto", project);
+		const widget = harness.buildWidget();
+		widget.render(80);
+		widget.handleMouse?.(mouse("click", 10, 1, 80));
+		const lines = widget.render(80);
+		// The expanded header also previews the last note, so the note's own
+		// row is the one that carries the send glyph with the text.
+		const row = lines.findIndex((line) => line.includes("del compacto") && line.includes("➤"));
+		assert.ok(row >= 0, `the expanded compact lists the note: ${JSON.stringify(lines)}`);
+		const column = deleteGlyphColumn(lines[row] as string);
+		assert.ok(column !== undefined, "the compact row carries the delete glyph");
+
+		widget.handleMouse?.(mouse("click", column, row, 80));
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes, [], "the compact delete removes the note");
+	});
+
 	it("scrolls the expanded compact list with the wheel (L26)", async () => {
 		await harness.sessionStart(project);
 		for (let id = 1; id <= 12; id++) await harness.runCommand(`add nota compacta numero ${id}`, project);
@@ -571,6 +590,49 @@ describe("gentle-notes extension wiring", () => {
 		const out = rail.handleMouse?.(mouse("move", 10, row, 46));
 		assert.equal(out?.render, true);
 		assert.ok(rail.render(46)[row]?.includes(`${MUTED}➤`), "leaving restores the muted glyph");
+	});
+
+	it("deletes a note from its row's delete glyph (D15)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add borrar del rail", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const lines = rail.render(46);
+		const row = lines.findIndex((line) => line.includes("borrar del rail"));
+		assert.ok(row >= 0, `the note paints: ${JSON.stringify(lines)}`);
+		const column = deleteGlyphColumn(lines[row] as string);
+		assert.ok(column !== undefined, "the delete glyph paints");
+
+		const result = rail.handleMouse?.(mouse("click", column, row, 46));
+		assert.equal(result?.handled, true);
+		await FLUSH();
+
+		assert.deepEqual(loadNotes(project).notes, [], "the note leaves the store for good");
+		const after = rail.render(46).join("\n");
+		assert.ok(!after.includes("borrar del rail"), "the note leaves the card");
+	});
+
+	it("paints the delete glyph accent on hover and deletes through the command (D15)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add desde comando", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const lines = rail.render(46);
+		const row = lines.findIndex((line) => line.includes("desde comando"));
+		assert.ok(row >= 0);
+		const column = deleteGlyphColumn(lines[row] as string);
+		assert.ok(column !== undefined);
+
+		rail.handleMouse?.(mouse("move", column, row, 46));
+		assert.ok(rail.render(46)[row]?.includes(`${ACCENT}×`), "hover paints the accent glyph");
+		const out = rail.handleMouse?.(mouse("move", 4, row, 46));
+		assert.equal(out?.render, true);
+		assert.ok(rail.render(46)[row]?.includes(`${MUTED}×`), "leaving restores the muted glyph");
+
+		await harness.runCommand("delete 1", project);
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes, [], "delete from the command removes it");
+		assert.ok(harness.notifies.some((entry) => entry.message.includes("deleted")), "the command reports the delete");
 	});
 
 	it("opens inline editing from a click on the note text and commits with Enter", async () => {

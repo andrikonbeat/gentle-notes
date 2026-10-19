@@ -97,6 +97,19 @@ export function updateNoteText(state: NotesState, id: number, text: unknown): Mu
 	};
 }
 
+/** Remove one note for good — the only hard delete. Ids never rewind, so a
+ * note added later never reuses a deleted id. */
+export function deleteNote(state: NotesState, id: number): MutationResult<NotesState> {
+	const note = state.notes.find((candidate) => candidate.id === id);
+	if (!note) return `no note #${id}`;
+	return {
+		state: {
+			...state,
+			notes: state.notes.filter((candidate) => candidate.id !== id),
+		},
+	};
+}
+
 export function clearNotes(state: NotesState): { state: NotesState; removed: number } {
 	return { state: emptyNotes(), removed: state.notes.length };
 }
