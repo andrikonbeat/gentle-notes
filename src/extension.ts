@@ -11,7 +11,7 @@ import { NOTE_STATUS, addNote, clearNotes, deleteNote, emptyNotes, markSent, not
 import { loadNotes, mutateNotes } from "./storage.ts";
 import { buildCompactNotesRow, buildNotesCard, collapsedNoteRow, COMPACT_ROW_CAP, controlSpan, deleteGlyphColumn, railControlText, sendGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
 import { CARD_GLYPH, CARD_TONE, paintPanelRows, panelBodyLine, panelBodyWidth, panelContentColumn, panelFloatApplies, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
-import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
+import { invalidateSidebar, sidebarPart, sidebarState } from "./sidebar-interop.ts";
 
 
 const WIDGET_KEY = "gentle-notes";
@@ -545,10 +545,12 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 	/** Compact widget for regular mode: one card-styled line — title, the
 	 * expand/collapse control inline, counts and the last note's first words —
 	 * with the panel background like the Todos header, and a blank row of air
-	 * below so it reads apart from the chat input. No row above: pi already
-	 * draws one spacer ahead of the above-editor widget group (L28). Expanded
-	 * it grows into the bounded note list. Paints nothing while empty. */
-	const makeCompactRow = (theme: Theme): Component & { digest?(): string } => {
+	 * below so it reads apart from the chat input — except while the Todos card
+	 * follows it, where that row is the gap between the two headers (L30). No
+	 * row above: pi already draws one spacer ahead of the above-editor widget
+	 * group (L28). Expanded it grows into the bounded note list. Paints nothing
+	 * while empty. */
+	const makeCompactRow = (theme: Theme, tui: TUI): Component & { digest?(): string } => {
 		const cardTheme = theme as unknown as NotesCardTheme;
 		let collapsed = true;
 		let controlHovered = false;
@@ -557,6 +559,11 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		let hoveredDeleteId: number | undefined;
 		// First visible row of the expanded list's window (L26).
 		let scrollTop = 0;
+		// Whether the Todos card renders below this block. It does at narrow
+		// widths (measured at 80 cols), and its own frame gives the two headers
+		// all the separation they need (L30).
+		let airBelow = true;
+		const hasTodosBelow = (): boolean => !sidebarState(tui).parts.has("todo");
 		let last: { rows: string[]; headerRow: number; control?: { start: number; end: number }; hits: NotesCardHit[]; bodyTotal: number } | undefined;
 		/** The pending note at a rendered row, with its send glyph column. */
 		const rowHitAt = (y: number): { id: number; column: number | undefined; deleteColumn: number | undefined } | undefined => {
@@ -573,7 +580,8 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					last = undefined;
 					return [];
 				}
-				last = buildCompactNotesRow(current, cardTheme, width, { collapsed, controlHovered, hoveredId, hoveredDeleteId, scrollTop });
+				airBelow = hasTodosBelow();
+				last = buildCompactNotesRow(current, cardTheme, width, { collapsed, controlHovered, hoveredId, hoveredDeleteId, scrollTop, airBelow });
 				// Keep the state where the render clamped it, so a shrunk backlog
 				// cannot leave the window past its end.
 				scrollTop = Math.max(0, Math.min(scrollTop, Math.max(0, last.bodyTotal - COMPACT_ROW_CAP)));
@@ -622,7 +630,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				return {};
 			},
 			digest(): string {
-				return JSON.stringify([current, collapsed, controlHovered, hoveredId, hoveredDeleteId, scrollTop]);
+				return JSON.stringify([current, collapsed, controlHovered, hoveredId, hoveredDeleteId, scrollTop, airBelow]);
 			},
 			invalidate(): void {},
 		};
@@ -631,7 +639,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 
 	const widgetFactory = (tui: TUI, theme: Theme): Component & { dispose?(): void } => {
 		widgetTui = tui;
-		return sidebarPart(tui, "notes", makeCompactRow(theme), makeRailCard(theme));
+		return sidebarPart(tui, "notes", makeCompactRow(theme, tui), makeRailCard(theme));
 	};
 
 	pi.on("session_start", (_event, ctx) => {
