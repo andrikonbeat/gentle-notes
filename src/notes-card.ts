@@ -319,7 +319,7 @@ export function buildCompactNotesRow(
 	state: NotesState,
 	theme: NotesCardTheme,
 	width: number,
-	options: { collapsed: boolean; controlHovered?: boolean; hoveredId?: number; hoveredDeleteId?: number; airBelow?: boolean },
+	options: { collapsed: boolean; controlHovered?: boolean; hoveredId?: number; hoveredDeleteId?: number },
 ): CompactNotesView {
 	if (state.notes.length === 0) return { rows: [], headerRow: 0, hits: [], bodyTotal: 0 };
 	const summary = notesSummary(state);
@@ -344,13 +344,12 @@ export function buildCompactNotesRow(
 	const last = state.notes[state.notes.length - 1];
 	const preview = last && previewRoom >= 4 ? ` — ${truncateToWidth(sanitizeNoteText(last.text), previewRoom - 3, "…")}` : "";
 	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle: `${counts}${preview}`, body: [], tone: CARD_TONE.INFO, glyph: "" };
-	// One blank row of air below keeps the widget off the chat input, but only
-	// when nothing else follows: the Todos card renders BELOW this block at
-	// narrow widths, so when it is present that row IS the gap the human reads
-	// as too wide (L30, measured at 80 cols). No row above: pi already draws a
-	// single spacer ahead of the whole above-editor widget group (L28).
+	// One blank row of air below keeps the widget off the chat input. No row
+	// above: pi already draws a single spacer ahead of the whole above-editor
+	// widget group, and the Todos card ends with its own blank row, so a
+	// leading row here stacked two empty lines between the two headers (L28).
 	const spaced = (rows: string[], headerRow: number, hits: NotesCardHit[], bodyTotal: number): CompactNotesView => ({
-		rows: options.airBelow === false ? rows : [...rows, ""],
+		rows: [...rows, ""],
 		headerRow,
 		control: span,
 		hits,

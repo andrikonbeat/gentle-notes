@@ -373,19 +373,6 @@ describe("buildCompactNotesRow", () => {
 		assert.equal(expanded.rows.at(-1), "", "one blank row below keeps it off the editor");
 	});
 
-	it("drops its trailing air when another card follows below (L30)", () => {
-		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
-		// The Todos card renders BELOW the notes block (measured at 80 cols),
-		// so the blank row this card appended is the gap the human sees, not
-		// separation from the editor.
-		const collapsed = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: true, airBelow: false });
-		assert.ok(collapsed.rows[0]?.includes("Notes"), `the header still paints: ${collapsed.rows[0]}`);
-		assert.notEqual(collapsed.rows.at(-1), "", `no blank row trails it: ${JSON.stringify(collapsed.rows)}`);
-		assert.equal(collapsed.rows.length, 1, `just the header row: ${collapsed.rows.length}`);
-		const expanded = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: false, airBelow: false });
-		assert.notEqual(expanded.rows.at(-1), "", `the expanded list drops the trailing air too: ${JSON.stringify(expanded.rows.at(-1))}`);
-	});
-
 	it("collapsed paints one card-styled line: air around, control inline, preview trailing", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
 		const view = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: true });
