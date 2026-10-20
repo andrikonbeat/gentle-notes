@@ -4,6 +4,7 @@
 // re-implemented locally so this extension never depends on where the
 // gentle-pi package is physically installed).
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { HostComponent } from "./host-contract.ts";
 
 const STATE = Symbol.for("gentle-pi.experimental-sidebar.state");
 const CACHE = Symbol.for("gentle-pi.experimental-sidebar.cache");
@@ -34,7 +35,7 @@ export function invalidateSidebar(tui: TUI): void {
  * Without gentle-shell the shared state exists but nothing paints the rail;
  * the bottom component still renders on its own.
  */
-export function sidebarPart<T extends Component & { dispose?(): void }>(tui: TUI, key: string, bottom: T, rail: Component = bottom): T {
+export function sidebarPart<T extends HostComponent>(tui: TUI, key: string, bottom: T, rail: Component = bottom): T {
 	if (!tui.terminal) return bottom;
 	const state = sidebarState(tui);
 	state.parts.set(key, rail);

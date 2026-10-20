@@ -318,5 +318,7 @@ export function panelBodyLine(text: string, tone: CardTone, theme: CardChromeThe
  * so spliced rows read as part of the block. */
 export function paintPanelRows(rows: readonly string[], theme: CardChromeTheme, width: number, tone: CardTone = CARD_TONE.INFO): string[] {
 	const open = floatOpener(theme, tone, width);
-	return open ? paintFloat(rows, open) : rows;
+	// Copy when nothing is painted: callers append to the result (the rail's
+	// overflow hint) and must never be handed the array they passed in.
+	return open ? paintFloat(rows, open) : [...rows];
 }

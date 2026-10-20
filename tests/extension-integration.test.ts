@@ -12,16 +12,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
-import type { Component, TUI, Theme, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext, Theme } from "../src/host-contract.ts";
 import gentleNotes from "../src/extension.ts";
+import { SEND_DESTINATION, readSettings, writeSettings } from "../src/settings.ts";
 import { sidebarState } from "../src/sidebar-interop.ts";
-import { loadNotes } from "../src/storage.ts";
-import { NOTE_STATUS } from "../src/notes-state.ts";
-import { controlSpan, deleteGlyphColumn } from "../src/notes-card.ts";
+import { loadNotes, saveNotes } from "../src/storage.ts";
+import { MAX_NOTE_LENGTH, NOTE_STATUS } from "../src/notes-state.ts";
+import { controlSpan, deleteGlyphColumn, restoreGlyphColumn, revertGlyphColumn } from "../src/notes-card.ts";
 import { sendGlyphColumn } from "../src/notes-card.ts";
 
 const MANAGER_ADD = "＋ Add a note…";
+const MANAGER_CLEAR = "✕ Clear all notes";
+const MANAGER_CLEAR_SENT = "✕ Clear all sent notes";
+const MANAGER_CLEAR_PENDING = "✕ Clear all pending notes";
 const ACCENT = "\x1b[38;5;205m";
 const WARNING = "\x1b[38;5;214m";
 const MUTED = "\x1b[38;5;242m";
@@ -34,11 +38,16 @@ interface WidgetCall {
 
 interface Harness {
 	sent: Array<{ content: unknown; options?: { deliverAs?: string } }>;
+	/** Text pushed into the chat's editor instead of sent straight away. */
+	pasted: string[];
 	notifies: Array<{ message: string; type?: string }>;
 	selectCalls: Array<{ title: string; options: string[] }>;
 	widgetCalls: WidgetCall[];
 	fakeTui: TUI;
 	getFocus: () => unknown;
+	/** Hand the keyboard to a stand-in component, like the chat editor holding
+	 * it before the card is clicked. */
+	setFocus: (component: unknown) => void;
 	setInput: (value: string | undefined) => void;
 	setSelect: (value: string | undefined) => void;
 	setConfirm: (value: boolean) => void;
@@ -54,6 +63,11 @@ interface Harness {
 	agentStart: () => void;
 	agentEnd: () => void;
 	runCommand: (args: string, cwd: string) => Promise<void>;
+	runNoteAlias: (args: string, cwd: string) => Promise<void>;
+	/** Feed raw terminal input through the terminal callback, exactly like the
+	 * real terminal does. `duringDispatch` runs inside the callback, emulating
+	 * the TUI routing the event to a component before the callback returns. */
+	feedInput: (data: string, duringDispatch?: () => void) => void;
 	runShortcut: (cwd: string) => Promise<void>;
 }
 
@@ -62,6 +76,7 @@ function makeHarness(): Harness {
 	const shortcuts = new Map<string, { handler: (ctx: ExtensionContext) => Promise<void> | void }>();
 	const handlers = new Map<string, Array<(event: unknown, ctx?: unknown) => void | Promise<void>>>();
 	const sent: Harness["sent"] = [];
+	const pasted: Harness["pasted"] = [];
 	const notifies: Harness["notifies"] = [];
 	const selectCalls: Harness["selectCalls"] = [];
 	const widgetCalls: WidgetCall[] = [];
@@ -93,14 +108,25 @@ function makeHarness(): Harness {
 	const applyFocus = (component: Component | null, next: boolean): void => {
 		if (component && "focused" in component) (component as unknown as { focused: boolean }).focused = next;
 	};
+	// The real terminal hands every input chunk to a single callback; the TUI
+	// routes it from there. Tests install their own to stand in for the TUI.
+	let pendingDispatch: (() => void) | undefined;
+	const fakeTerminal: { rows: number; columns: number; inputHandler?: (data: string) => void } = {
+		rows: 48,
+		columns: 160,
+		inputHandler: () => {
+			pendingDispatch?.();
+		},
+	};
 	const fakeTui = {
-		terminal: { rows: 48 },
+		terminal: fakeTerminal,
 		requestRender() {},
 		setFocus(component: Component | null) {
 			applyFocus(focusedComponent, false);
 			focusedComponent = component;
 			applyFocus(component, true);
 		},
+		getFocusedComponent: () => focusedComponent,
 	} as unknown as TUI;
 
 	const makeCtx = (cwd: string): ExtensionContext =>
@@ -120,6 +146,9 @@ function makeHarness(): Harness {
 					return selectResult;
 				},
 				confirm: async () => confirmResult,
+				pasteToEditor: (text: string) => {
+					pasted.push(text);
+				},
 			},
 		}) as unknown as ExtensionContext;
 
@@ -155,11 +184,15 @@ function makeHarness(): Harness {
 
 	return {
 		sent,
+		pasted,
 		notifies,
 		selectCalls,
 		widgetCalls,
 		fakeTui,
 		getFocus: () => focusedComponent,
+		setFocus: (component: unknown) => {
+			fakeTui.setFocus(component as Component | null);
+		},
 		setInput: (value) => {
 			inputResult = value;
 		},
@@ -191,6 +224,16 @@ function makeHarness(): Harness {
 			const command = commands.get("notes");
 			assert.ok(command, "notes command not registered");
 			await command.handler(args, makeCtx(cwd));
+		},
+		runNoteAlias: async (args: string, cwd: string) => {
+			const command = commands.get("note");
+			assert.ok(command, "note alias command not registered");
+			await command.handler(args, makeCtx(cwd));
+		},
+		feedInput: (data: string, duringDispatch?: () => void) => {
+			pendingDispatch = duringDispatch;
+			fakeTerminal.inputHandler?.(data);
+			pendingDispatch = undefined;
 		},
 		runShortcut: async (cwd: string) => {
 			const shortcut = shortcuts.get("alt+n");
@@ -256,6 +299,43 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(last, "session_start installs a widget");
 		assert.equal(last.key, "gentle-notes");
 		assert.equal(typeof last.content, "function");
+	});
+
+	it("adds a note straight from the chat with /note <text>", async () => {
+		await harness.sessionStart(project);
+		await harness.runNoteAlias("llamar al dentista mañana", project);
+		const stored = loadNotes(project);
+		assert.equal(stored.notes.length, 1);
+		assert.equal(stored.notes[0]?.text, "llamar al dentista mañana");
+		assert.equal(stored.notes[0]?.status, "pending");
+		assert.equal(harness.notifies[harness.notifies.length - 1]?.message, "Note saved");
+	});
+
+	it("collapses whitespace and rejects an empty /note argument", async () => {
+		await harness.sessionStart(project);
+		await harness.runNoteAlias("   ", project);
+		assert.equal(loadNotes(project).notes.length, 0, "a blank argument stores nothing");
+		await harness.runNoteAlias("dos    espacios   aqui", project);
+		assert.equal(loadNotes(project).notes[0]?.text, "dos espacios aqui");
+	});
+
+	it("refuses a note over the length limit and leaves the store untouched", async () => {
+		await harness.sessionStart(project);
+		const before = loadNotes(project);
+		await harness.runNoteAlias("x".repeat(MAX_NOTE_LENGTH + 1), project);
+		const after = loadNotes(project);
+		assert.equal(after.notes.length, 0, "nothing is stored");
+		assert.equal(after.nextId, before.nextId, "the id counter does not advance");
+		const message = harness.notifies[harness.notifies.length - 1];
+		assert.match(message?.message ?? "", /too long/);
+		assert.match(message?.message ?? "", new RegExp(`max ${MAX_NOTE_LENGTH}`));
+	});
+
+	it("prompts for the note text when /note arrives without an argument", async () => {
+		await harness.sessionStart(project);
+		harness.setInput("escrita desde el dialogo");
+		await harness.runNoteAlias("", project);
+		assert.equal(loadNotes(project).notes[0]?.text, "escrita desde el dialogo");
 	});
 
 	it("loads persisted notes at session start and hides the empty compact row", async () => {
@@ -345,6 +425,33 @@ describe("gentle-notes extension wiring", () => {
 		assert.deepEqual(loadNotes(project).notes, [], "the compact delete removes the note");
 	});
 
+	it("restores a sent note from the compact list's restore glyph", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add del compacto enviada", project);
+		const widget = harness.buildWidget();
+		widget.render(80);
+		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		const expanded = widget.render(80);
+		const row = expanded.findIndex((line) => line.includes("del compacto enviada") && line.includes("➤"));
+		assert.ok(row >= 0, `the expanded compact lists the note: ${JSON.stringify(expanded)}`);
+		const sendColumn = sendGlyphColumn(expanded[row] as string) as number;
+		widget.handleMouse?.(mouse("click", sendColumn, row, 80));
+		await FLUSH();
+
+		// The row moves to the sent section, where the ↶ puts it back.
+		const sent = widget.render(80);
+		// The compact header previews the last note too, so the note's own row
+		// is the one carrying the sent glyph.
+		const sentRow = sent.findIndex((line) => line.includes("del compacto enviada") && line.includes("✓"));
+		const restoreColumn = restoreGlyphColumn(sent[sentRow] as string);
+		assert.ok(restoreColumn !== undefined, "the compact sent row carries the restore glyph");
+		widget.handleMouse?.(mouse("click", restoreColumn as number, sentRow, 80));
+		await FLUSH();
+		const state = loadNotes(project);
+		assert.equal(state.notes[0]?.status, NOTE_STATUS.PENDING, "the compact restore puts the note back");
+		assert.equal(state.notes[0]?.sentAt, undefined);
+	});
+
 	it("scrolls the expanded compact list with the wheel (L26)", async () => {
 		await harness.sessionStart(project);
 		for (let id = 1; id <= 12; id++) await harness.runCommand(`add nota compacta numero ${id}`, project);
@@ -366,7 +473,12 @@ describe("gentle-notes extension wiring", () => {
 
 		const wheelBack = widget.handleMouse?.(mouse("wheel", 30, 4, 80, -99));
 		assert.equal(wheelBack?.handled, true);
-		assert.ok(widget.render(80).some((line) => line.includes("↑↓ 1–8/12")), "the wheel clamps at the top");
+		// Sending one note grows the list: eleven pendings plus the sent
+		// section's own header row and its row.
+		assert.ok(
+			widget.render(80).some((line) => line.includes("↑↓ 1–8/13")),
+			`the wheel clamps at the top: ${widget.render(80).join(" | ")}`,
+		);
 	});
 
 	it("paints the rail card by default, with the input row, even with no notes", async () => {
@@ -512,6 +624,213 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(!hovered.includes(`${WARNING}▾ Collapse`), "the other control keeps its idle role");
 	});
 
+	it("remembers the folded view across a session restart", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("add una nota que se va a plegar", project);
+		await harness.runCommand("fold", project);
+		await FLUSH();
+		assert.equal(loadNotes(project).ui?.foldAll, true, "the fold mode reaches the stored state");
+
+		// A brand new session over the same project restores the folded view.
+		const second = makeHarness();
+		await second.sessionStart(project);
+		second.buildWidget();
+		const rail = second.rail();
+		assert.ok(rail.render(46)[1]?.includes("▸ Full"), "the block starts folded");
+		assert.ok(rail.render(46).some((line) => line.includes("…")), "the note is folded to one line");
+	});
+
+	it("remembers the collapsed block across a session restart", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("collapse", project);
+		await FLUSH();
+		assert.equal(loadNotes(project).ui?.railCollapsed, true);
+
+		const second = makeHarness();
+		await second.sessionStart(project);
+		second.buildWidget();
+		assert.ok(second.rail().render(46)[1]?.includes("▸ Expand"), "the block comes back collapsed");
+	});
+
+	it("remembers one note's fold exception across a session restart", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("add primera nota larga que necesita varias filas para leerse entera", project);
+		await harness.runCommand("add segunda nota que sigue plegada al volver", project);
+		await harness.runCommand("fold", project);
+		await FLUSH();
+		const rail = harness.rail();
+		// A click on a folded note's text unfolds it: that deviation from the
+		// mode — not the mode itself — is what has to survive.
+		// The folded note is the row that keeps its first words and marks the
+		// rest with an ellipsis; the field placeholder carries one too, so the
+		// search goes by the note's own text.
+		const row = rail.render(46).findIndex((line) => line.includes("primera nota") && line.includes("…"));
+		assert.ok(row >= 0, "the folded note marks the hidden text");
+		rail.handleMouse?.(mouse("click", 6, row, 46));
+		await FLUSH();
+		assert.equal(loadNotes(project).ui?.foldAll, true, "the folded default survives");
+		assert.deepEqual(loadNotes(project).ui?.foldOverrides, { 1: false }, "the unfolded note is the exception");
+
+		const second = makeHarness();
+		await second.sessionStart(project);
+		second.buildWidget();
+		const restored = second.rail().render(46);
+		assert.ok(restored[1]?.includes("▸ Full"), "the folded default comes back");
+		assert.ok(restored.some((line) => line.includes("leerse")), "the exception stays unfolded past the first row");
+		assert.ok(restored.some((line) => line.includes("segunda nota") && line.includes("…")), "the other note stays folded");
+	});
+
+	it("collapses the sent section from its control and remembers it", async () => {
+		// A long list is what paints the summary row by default: seed one sent
+		// note among nineteen pendings, with the section expanded.
+		const notes = [];
+		for (let id = 1; id <= 19; id++) notes.push({ id, text: `pendiente ${id}`, status: "pending" as const, createdAt: id });
+		notes.push({ id: 20, text: "una enviada", status: "sent" as const, createdAt: 20, sentAt: 21 });
+		await saveNotes(project, { notes, nextId: 21, ui: { sentCollapsed: false } });
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const sentRow = rail.render(46).findIndex((line) => line.includes("✓") && line.includes("sent"));
+		assert.ok(sentRow >= 0, `the sent summary is painted: ${JSON.stringify(rail.render(46))}`);
+		const span = controlSpan(rail.render(46)[sentRow] ?? "", "Collapse");
+		assert.ok(span, "the sent summary carries a collapse control");
+
+		rail.handleMouse?.(mouse("click", span.start, sentRow, 46));
+		await FLUSH();
+		const after = rail.render(46);
+		assert.ok(after.some((line) => line.includes("✓") && line.includes("Expand")), "the control flips to Expand");
+		assert.ok(!after.some((line) => line.includes("una enviada")), "the sent rows fold away");
+		assert.equal(loadNotes(project).ui?.sentCollapsed, true, "the collapse reaches the stored state");
+
+		// The next session opens with the sent section already folded, and the
+		// same control brings it back.
+		const second = makeHarness();
+		await second.sessionStart(project);
+		second.buildWidget();
+		const secondRail = second.rail();
+		const restoredRow = secondRail.render(46).findIndex((line) => line.includes("✓") && line.includes("Expand"));
+		assert.ok(restoredRow >= 0, "the section comes back collapsed");
+		const expand = controlSpan(secondRail.render(46)[restoredRow] ?? "", "Expand");
+		assert.ok(expand);
+		secondRail.handleMouse?.(mouse("click", expand.start, restoredRow, 46));
+		await FLUSH();
+		assert.ok(secondRail.render(46).some((line) => line.includes("una enviada")), "expanding brings the sent rows back");
+	});
+
+	it("keeps the sent control on a short list, both ways", async () => {
+		// The trap this pins: with three notes instead of twenty the header used
+		// to disappear, so a section that was collapsed (or expanded) could not
+		// be toggled back at all.
+		await harness.sessionStart(project);
+		await harness.runCommand("add sigue pendiente", project);
+		await harness.runCommand("add queda enviada", project);
+		await harness.runCommand("send 2", project);
+		await FLUSH();
+		harness.buildWidget();
+		const rail = harness.rail();
+		/** The `✓ N sent` header row, the only line carrying both marks. */
+		const headerRow = (lines: string[]): number => lines.findIndex((line) => line.includes("✓") && line.includes("sent"));
+
+		const first = headerRow(rail.render(46));
+		assert.ok(first >= 0, `a short list still paints the header: ${JSON.stringify(rail.render(46))}`);
+		assert.ok(first > 0, "the header sits under the pending row, above the sent one");
+		const collapse = controlSpan(rail.render(46)[first] as string, "Collapse");
+		assert.ok(collapse, "a short list offers the collapse");
+
+		rail.handleMouse?.(mouse("click", collapse.start, first, 46));
+		await FLUSH();
+		const folded = rail.render(46);
+		const foldedRow = headerRow(folded);
+		assert.ok(folded[foldedRow]?.includes("Expand"), `the control flips: ${folded.join(" | ")}`);
+		assert.ok(!folded.some((line) => line.includes("queda enviada")), "the sent row folds away");
+
+		const expand = controlSpan(rail.render(46)[foldedRow] as string, "Expand");
+		assert.ok(expand, "the way back is still painted");
+		rail.handleMouse?.(mouse("click", expand.start, foldedRow, 46));
+		await FLUSH();
+		const reopened = rail.render(46);
+		assert.ok(reopened.some((line) => line.includes("queda enviada")), "expanding brings the row back");
+		const reopenedRow = headerRow(reopened);
+		assert.ok(reopened[reopenedRow]?.includes("Collapse"), `and the control stays reachable: ${reopened.join(" | ")}`);
+	});
+
+	it("restores a sent note from its row's restore glyph", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("add revisar el footer", project);
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		// Send it first: the row moves to the sent section with its ↶ affordance.
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+		const sentRow = rail.render(46).findIndex((line) => line.includes("revisar el footer"));
+		assert.ok(sentRow >= 0, "the note is painted as a sent row");
+		const restoreColumn = restoreGlyphColumn(rail.render(46)[sentRow] as string);
+		assert.ok(restoreColumn !== undefined, "the sent row carries the restore glyph");
+
+		rail.handleMouse?.(mouse("click", restoreColumn as number, sentRow, 46));
+		await FLUSH();
+		const state = loadNotes(project);
+		assert.equal(state.notes[0]?.status, NOTE_STATUS.PENDING, "the note is pending again");
+		assert.equal(state.notes[0]?.sentAt, undefined, "restoring clears the send instant");
+		assert.ok(harness.notifies.some((entry) => entry.message.includes("restored to pending")));
+	});
+
+	it("puts a restored note back into sent without sending it again", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("add volver a enviada", project);
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+		// Take it back to pending from the sent row...
+		const sentRow = rail.render(46).findIndex((line) => line.includes("volver a enviada"));
+		const restoreColumn = restoreGlyphColumn(rail.render(46)[sentRow] as string) as number;
+		rail.handleMouse?.(mouse("click", restoreColumn, sentRow, 46));
+		await FLUSH();
+		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.PENDING);
+
+		// ...and the row now offers the way back to sent, with no new message.
+		const pendingRow = rail.render(46).findIndex((line) => line.includes("volver a enviada"));
+		const backColumn = revertGlyphColumn(rail.render(46)[pendingRow] as string);
+		assert.ok(backColumn !== undefined, `the row carries the sent-again glyph: ${rail.render(46)[pendingRow]}`);
+		assert.equal(harness.sent.length, 1, "only the first send reached the chat");
+		rail.handleMouse?.(mouse("click", backColumn as number, pendingRow, 46));
+		await FLUSH();
+
+		const state = loadNotes(project);
+		assert.equal(state.notes[0]?.status, NOTE_STATUS.SENT, "the note is in the sent list again");
+		assert.equal(state.notes[0]?.everSent, true);
+		assert.equal(harness.sent.length, 1, "nothing else was submitted to the agent");
+		assert.ok(
+			harness.notifies.some((entry) => entry.message.includes("back in the sent list")),
+			`the change is announced: ${JSON.stringify(harness.notifies)}`,
+		);
+	});
+
+	it("paints the restore glyph with the hover role and drops it on exit", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("add una nota que ya se mando", project);
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+		const sentRow = rail.render(46).findIndex((line) => line.includes("una nota que ya se mando"));
+		const restoreColumn = restoreGlyphColumn(rail.render(46)[sentRow] as string) as number;
+
+		rail.handleMouse?.(mouse("move", restoreColumn, sentRow, 46));
+		const hovered = rail.render(46)[sentRow] ?? "";
+		assert.ok(hovered.includes(`${ACCENT}↶`), `hover paints the accent role: ${JSON.stringify(hovered)}`);
+		rail.handleMouse?.(mouse("move", 6, sentRow, 46));
+		const idle = rail.render(46)[sentRow] ?? "";
+		assert.ok(idle.includes(`${MUTED}↶`), `leaving the glyph restores the muted role: ${JSON.stringify(idle)}`);
+	});
+
 	it("drives both view modes from the notes command (S8)", async () => {
 		await harness.sessionStart(project);
 		harness.buildWidget();
@@ -573,6 +892,84 @@ describe("gentle-notes extension wiring", () => {
 		assert.deepEqual(harness.sent, [{ content: "en cola", options: { deliverAs: "followUp" } }]);
 	});
 
+	it("sends straight to the chat while the destination is the chat", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add derecho al chat", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+		assert.deepEqual(harness.sent, [{ content: "derecho al chat", options: undefined }]);
+		assert.deepEqual(harness.pasted, [], "the chat editor is not touched");
+	});
+
+	it("loads the note into the chat input when the destination is the editor", async () => {
+		writeSettings({ version: 1, sendDestination: SEND_DESTINATION.EDITOR });
+		await harness.sessionStart(project);
+		await harness.runCommand("add editar antes", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+		assert.deepEqual(harness.pasted, ["editar antes"], "the text lands in the chat editor");
+		assert.deepEqual(harness.sent, [], "nothing is submitted yet");
+		assert.equal(loadNotes(project).notes[0]?.status, "sent", "the note leaves the pending list");
+		assert.ok(
+			harness.notifies.some((entry) => entry.message.includes("loaded into the chat input")),
+			`the notification names the destination: ${JSON.stringify(harness.notifies)}`,
+		);
+	});
+
+	it("offers both send targets and ticks the live one", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("settings", project);
+		const picker = harness.selectCalls[harness.selectCalls.length - 1];
+		assert.equal(picker?.title, "Send notes to");
+		assert.deepEqual(
+			picker?.options,
+			["✓ Send to the chat now", "  Load into the chat input to edit first"],
+			"the live target carries the tick",
+		);
+	});
+
+	it("persists the send target for every project", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("settings editor", project);
+		assert.equal(readSettings().sendDestination, SEND_DESTINATION.EDITOR, "the global file carries the choice");
+		assert.ok(
+			harness.notifies.some((entry) => entry.message.toLowerCase().includes("chat input")),
+			`the change is announced: ${JSON.stringify(harness.notifies)}`,
+		);
+	});
+
+	it("rejects an unknown target and keeps the stored one", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("settings telepathy", project);
+		assert.equal(readSettings().sendDestination, SEND_DESTINATION.CHAT, "nothing was saved");
+		const message = harness.notifies[harness.notifies.length - 1];
+		assert.equal(message?.type, "error", `the rejection is an error: ${JSON.stringify(message)}`);
+	});
+
+	it("switches the send target from the manager menu", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add algo", project);
+		// Choosing the entry opens the destination picker underneath it.
+		harness.setSelect("⚙ Send target: chat");
+		await harness.runCommand("", project);
+		const [menu, picker] = harness.selectCalls;
+		assert.ok(
+			menu?.options.includes("⚙ Send target: chat"),
+			`the manager entry names the live target: ${JSON.stringify(menu?.options)}`,
+		);
+		assert.equal(picker?.title, "Send notes to", "the entry opens the picker");
+
+		harness.setSelect("✓ Load into the chat input to edit first");
+		await harness.runCommand("settings", project);
+		assert.equal(readSettings().sendDestination, SEND_DESTINATION.EDITOR);
+	});
+
 	it("highlights the send glyph on hover and restores it on exit", async () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add hoverme", project);
@@ -588,6 +985,31 @@ describe("gentle-notes extension wiring", () => {
 		const out = rail.handleMouse?.(mouse("move", 10, row, 46));
 		assert.equal(out?.render, true);
 		assert.ok(rail.render(46)[row]?.includes(`${MUTED}➤`), "leaving restores the muted glyph");
+	});
+
+	it("sends from two columns beside the send glyph", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add objetivo amplio", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		// The glyph stays one cell — a terminal has no font sizes — so the
+		// target grows instead: two columns to either side still send.
+		rail.handleMouse?.(mouse("click", column - 2, row, 46));
+		await FLUSH();
+		assert.deepEqual(harness.sent, [{ content: "objetivo amplio", options: undefined }]);
+	});
+
+	it("leaves the third column to the row itself", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add todavia texto", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column - 3, row, 46));
+		await FLUSH();
+		assert.deepEqual(harness.sent, [], "three columns away is the note's text, not the button");
+		assert.equal(loadNotes(project).notes[0]?.status, "pending", "the note stays pending");
 	});
 
 	it("deletes a note from its row's delete glyph (D15)", async () => {
@@ -783,13 +1205,14 @@ describe("gentle-notes extension wiring", () => {
 		const rail = harness.rail();
 		const first = rail.render(46);
 		assert.equal(first.filter((line) => line.includes("nota numero")).length, 1, "only one note is visible");
-		const hint = first[first.length - 1] ?? "";
+		// Hint is now inside the panel body (before bottom rule), so check second-to-last line
+		const hint = first[first.length - 2] ?? "";
 		assert.ok(hint.includes("↑↓ 1–1/6"), `overflow hint reports the window: ${hint}`);
 
 		const wheel = rail.handleMouse?.(mouse("wheel", 20, 4, 46, 1));
 		assert.equal(wheel?.handled, true);
 		const second = rail.render(46);
-		const hintAfter = second[second.length - 1] ?? "";
+		const hintAfter = second[second.length - 2] ?? "";
 		assert.ok(hintAfter.includes("↑↓ 2–2/6"), `scrolling advances the window: ${hintAfter}`);
 	});
 
@@ -849,6 +1272,146 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("clear", project);
 		assert.deepEqual(loadNotes(project).notes, []);
 		assert.deepEqual(harness.buildWidget().render(80), []);
+	});
+
+	it("offers the scoped clears in the manager and removes one group only", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add queda pendiente", project);
+		await harness.runCommand("add se manda al chat", project);
+		// Send the second one so the menu has both groups.
+		await harness.runCommand("send 2", project);
+		await FLUSH();
+
+		harness.setSelect(MANAGER_CLEAR_SENT);
+		harness.setConfirm(true);
+		await harness.runCommand("", project);
+		const options = harness.selectCalls[harness.selectCalls.length - 1]?.options ?? [];
+		assert.ok(options.includes(MANAGER_CLEAR_SENT), `the menu offers the sent clear: ${JSON.stringify(options)}`);
+		assert.ok(options.includes(MANAGER_CLEAR_PENDING), "the menu offers the pending clear");
+		assert.ok(options.includes(MANAGER_CLEAR), "the full clear stays");
+		const afterSent = loadNotes(project);
+		assert.deepEqual(afterSent.notes.map((note) => note.text), ["queda pendiente"], "only the sent group went");
+		assert.ok(harness.notifies.some((entry) => entry.message.includes("Sent notes cleared (1)")));
+	});
+
+	it("clears only the pending notes from the manager", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add se queda enviada", project);
+		await harness.runCommand("add esta se borra", project);
+		harness.setSelect(`➤ #1 se queda enviada`);
+		await harness.runCommand("send", project);
+		await FLUSH();
+
+		harness.setSelect(MANAGER_CLEAR_PENDING);
+		harness.setConfirm(true);
+		await harness.runCommand("", project);
+		const state = loadNotes(project);
+		assert.deepEqual(state.notes.map((note) => note.status), [NOTE_STATUS.SENT], "the sent note survives");
+		assert.ok(harness.notifies.some((entry) => entry.message.includes("Pending notes cleared (1)")));
+	});
+
+	it("declining the scoped clear keeps the notes", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add se manda pero se queda", project);
+		await harness.runCommand("send 1", project);
+		await FLUSH();
+
+		harness.setSelect(MANAGER_CLEAR_SENT);
+		harness.setConfirm(false);
+		await harness.runCommand("", project);
+		assert.equal(loadNotes(project).notes.length, 1, "a declined confirm removes nothing");
+	});
+
+	it("hides a scoped clear while its group is empty", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add solo pendiente", project);
+		harness.setSelect(MANAGER_CLEAR_PENDING);
+		harness.setConfirm(true);
+		await harness.runCommand("", project);
+		assert.equal(loadNotes(project).notes.length, 0);
+		// With no notes at all, neither scoped clear is offered.
+		await harness.runCommand("", project);
+		const options = harness.selectCalls[harness.selectCalls.length - 1]?.options ?? [];
+		assert.ok(!options.includes(MANAGER_CLEAR_SENT), "no sent clear without sent notes");
+		assert.ok(!options.includes(MANAGER_CLEAR_PENDING), "no pending clear without pending notes");
+	});
+
+	it("releases the field when a click lands outside the card", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		// Click the capture field: the card takes the keyboard.
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		assert.ok(harness.getFocus(), "the card holds the keyboard");
+		assert.equal((rail as unknown as { focused?: boolean }).focused, true);
+
+		// A press somewhere else in the terminal reaches the input listeners
+		// before any component, and the card is not the receiver: the keyboard
+		// has to come back to the chat instead of trapping every keystroke.
+		harness.feedInput("\x1b[<0;10;40M");
+		await FLUSH();
+		assert.equal(harness.getFocus(), null, "the card released the keyboard");
+		assert.equal((rail as unknown as { focused?: boolean }).focused, false);
+	});
+
+	it("hands the keyboard back to the component it took it from", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const chatEditor = { render: () => [], invalidate() {}, handleInput() {} };
+		harness.setFocus(chatEditor);
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		assert.equal(harness.getFocus(), rail, "the card takes the keyboard");
+
+		// pi-tui drops every keystroke while nothing is focused, so clearing
+		// focus would leave the chat deaf: the card must return the keyboard to
+		// whoever had it.
+		harness.feedInput("\x1b[<0;10;40M");
+		await FLUSH();
+		assert.equal(harness.getFocus(), chatEditor, "the chat editor got the keyboard back");
+	});
+
+	it("keeps the keyboard when the press belongs to the card", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const field = rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		// The TUI routes the press to the card inside the terminal callback, so
+		// the card's tick is already bumped when the callback returns.
+		harness.feedInput("\x1b[<0;5;3M", () => rail.handleMouse?.(mouse("press", 5, 3, 46)));
+		await FLUSH();
+		assert.ok(harness.getFocus(), `the card keeps the keyboard: rendered ${field.length} rows`);
+	});
+
+	it("ignores wheel and drag input when deciding to release the keyboard", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		harness.feedInput("\x1b[<64;10;40M"); // wheel up
+		harness.feedInput("\x1b[<32;10;40M"); // pointer motion
+		await FLUSH();
+		assert.ok(harness.getFocus(), "scrolling the chat never steals focus");
+	});
+
+	it("commits an open inline edit instead of dropping it on a click-away", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add texto original", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const lines = rail.render(46);
+		const row = lines.findIndex((line) => line.includes("texto original") && line.includes("➤"));
+		rail.handleMouse?.(mouse("click", 6, row, 46));
+		rail.handleInput?.("\x15"); // ctrl+u clears the editor line
+		rail.handleInput?.("texto editado");
+		harness.feedInput("\x1b[<0;10;40M");
+		await FLUSH();
+		assert.equal(harness.getFocus(), null, "the card released the keyboard");
+		assert.equal(loadNotes(project).notes[0]?.text, "texto editado", "the draft was committed, not dropped");
 	});
 
 	it("suppresses the compact row while visibility.notes is false", async () => {

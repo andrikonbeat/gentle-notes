@@ -58,6 +58,7 @@ describe("buildNotesCard hits", () => {
 		assert.deepEqual(buildNotesCard(emptyNotes(), theme, 46), {
 			bodyRows: [],
 			hits: [],
+			sentHits: [],
 			summary: { pending: 0, sent: 0, total: 0 },
 		});
 	});
@@ -69,8 +70,9 @@ describe("buildNotesCard hits", () => {
 		state = unwrap(markSent(state, 2, 100)).state;
 		state = unwrap(addNote(state, "cc", 3)).state;
 		const view = buildNotesCard(state, theme, 46);
-		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 1, id: 3 }]);
-		assert.equal(view.bodyRows.length, 3);
+		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 1, id: 3 }], "pendings are numbered before the sent section");
+		assert.deepEqual(view.sentHits, [{ row: 3, id: 2 }], "the sent row sits under its header");
+		assert.equal(view.bodyRows.length, 4, "two pendings, the sent header, the sent row");
 	});
 
 	it("advances the hit row past wrapped lines", () => {
