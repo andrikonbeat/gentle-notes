@@ -315,7 +315,12 @@ describe("mutateNotes", () => {
 		}, env);
 		try {
 			await mutateNotes(project, (current) => addNote(current, "a", 1), env);
-			for (let i = 0; i < 40 && seen.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+			// A watcher event is environmental, not deterministic: fsevents on macOS
+			// coalesces and a shared runner can push delivery past a fixed budget —
+			// 400ms of ticks made CI red once at 482ms. Wait on a deadline with a
+			// wide margin instead, and leave as soon as the subscriber hears it.
+			const deadline = Date.now() + 5_000;
+			while (seen.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
 			assert.deepEqual(seen, ["ok:1"], "the healthy subscriber still hears about the change");
 		} finally {
 			stopThrowing();
