@@ -248,6 +248,60 @@ describe("mutateNotes", () => {
 		assert.equal(loadNotes(project, env).notes[0]?.text, "sobrevive", "the store is usable again");
 	});
 
+	it("keeps every preserved copy when two preserves land in the same millisecond (D3)", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const path = notesFilePath(project, env);
+		const dir = dirname(path);
+		mkdirSync(dir, { recursive: true });
+		// Two sessions preserving the same project inside one millisecond is the
+		// case a timestamp-only name loses: the rename silently overwrites the
+		// first payload, which is the one thing this path exists to keep.
+		const realNow = Date.now;
+		Date.now = () => 1_700_000_000_000;
+		try {
+			writeFileSync(path, "primera basura", { mode: 0o600 });
+			await mutateNotes(project, (current) => addNote(current, "uno", 1), env);
+			writeFileSync(path, "segunda basura", { mode: 0o600 });
+			await mutateNotes(project, (current) => addNote(current, "dos", 2), env);
+		} finally {
+			Date.now = realNow;
+		}
+		const backups = readdirSync(dir).filter((name) => name.includes(".corrupt-"));
+		assert.equal(backups.length, 2, `both payloads are preserved: ${JSON.stringify(backups)}`);
+		const payloads = backups.map((name) => readFileSync(join(dir, name), "utf8")).sort();
+		assert.deepEqual(payloads, ["primera basura", "segunda basura"], "each backup keeps its own bytes");
+	});
+
+	it("sets aside a store whose ids collide instead of merging them (P1.3)", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const path = notesFilePath(project, env);
+		mkdirSync(dirname(path), { recursive: true });
+		// A hand-edited store with one id on two notes: loading it would make
+		// every id-keyed mutation speak for both, so it takes the same path as
+		// any other unreadable file — preserved first, never merged.
+		const colliding = JSON.stringify({
+			notes: [
+				{ id: 1, text: "una", status: "pending", createdAt: 1 },
+				{ id: 1, text: "dos", status: "pending", createdAt: 2 },
+			],
+			nextId: 2,
+		});
+		writeFileSync(path, colliding, "utf8");
+		assert.deepEqual(loadNotes(project, env), emptyNotes(), "a store that would delete two notes at once is not loaded");
+
+		await mutateNotes(project, (current) => addNote(current, "sobrevive", 3), env);
+
+		const dir = dirname(path);
+		const backup = readdirSync(dir).find((name) => name.includes("corrupt"));
+		assert.ok(backup, `the colliding payload is kept aside: ${JSON.stringify(readdirSync(dir))}`);
+		assert.equal(readFileSync(join(dir, backup as string), "utf8"), colliding, "byte for byte");
+		assert.equal(loadNotes(project, env).notes[0]?.text, "sobrevive", "the store is usable again");
+	});
+
 	it("keeps the other watchers alive when one subscriber throws", async () => {
 		const base = newBase();
 		const env = { GENTLE_PI_CONFIG_HOME: base };

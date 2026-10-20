@@ -67,6 +67,18 @@ export function isNotesState(value: unknown): value is NotesState {
 	const state = value as Record<string, unknown>;
 	if (!Array.isArray(state.notes) || !state.notes.every(isNoteTask)) return false;
 	if (typeof state.nextId !== "number" || !Number.isInteger(state.nextId) || state.nextId < 1) return false;
+	// Ids are the handle every mutation works by, so the store has to hold each
+	// one at most once: a hand-edited file with two notes sharing an id would
+	// make deleteNote remove both, and restore/markSent rewrite both. `nextId`
+	// has to beat every stored id as well: a rewound counter would hand the next
+	// add an id that is already taken. (Clearing every note restarts the
+	// counter, which is harmless — with no notes left, no id is taken.)
+	const seenIds = new Set<number>();
+	for (const note of state.notes as NoteTask[]) {
+		if (seenIds.has(note.id)) return false;
+		seenIds.add(note.id);
+		if (note.id >= state.nextId) return false;
+	}
 	if (state.ui !== undefined) {
 		if (typeof state.ui !== "object" || state.ui === null) return false;
 		const ui = state.ui as Record<string, unknown>;
@@ -143,7 +155,9 @@ export function addNote(state: NotesState, text: unknown, now: number): { state:
 	if (clean.length === 0) return "note text is required";
 	if (clean.length > MAX_NOTE_LENGTH) return tooLongMessage(clean.length);
 	const note: NoteTask = { id: state.nextId, text: clean, status: NOTE_STATUS.PENDING, createdAt: now };
-	return { state: { notes: [...state.notes, note], nextId: state.nextId + 1 }, note };
+	// Spread first: the persisted view state (`ui`) travels in the same file and a
+	// capture must not wipe the collapsed/folded flags the session saved.
+	return { state: { ...state, notes: [...state.notes, note], nextId: state.nextId + 1 }, note };
 }
 
 export function markSent(state: NotesState, id: number, now: number): MutationResult<NotesState> {

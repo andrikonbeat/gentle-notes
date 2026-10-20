@@ -4,7 +4,7 @@
 // concurrent sessions in the same project never interleave a read-modify-write.
 // Real-time sync: file watcher notifies all sessions of external changes.
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, watch, type FSWatcher } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { emptyNotes, isNotesState, type NotesState } from "./notes-state.ts";
@@ -70,7 +70,15 @@ function readState(path: string): NotesState {
  * cannot be preserved: refusing to save is better than writing over the user's
  * data, and the caller surfaces the error. */
 function preserveUnreadable(path: string): void {
-	const backup = `${path}.corrupt-${Date.now()}`;
+	// Timestamps collide — two sessions preserving the same project inside one
+	// millisecond — and a rename would silently overwrite the earlier payload,
+	// which is the one thing this path exists to keep. The pid separates
+	// processes and the loop separates calls within one.
+	const stamp = Date.now();
+	let backup = `${path}.corrupt-${stamp}-${process.pid}`;
+	for (let attempt = 1; existsSync(backup); attempt += 1) {
+		backup = `${path}.corrupt-${stamp}-${process.pid}-${attempt}`;
+	}
 	try {
 		renameSync(path, backup);
 	} catch (error) {
@@ -176,8 +184,7 @@ export function watchNotes(projectPath: string, callback: NotesChangeCallback, e
 		const dir = dirname(path);
 		const target = basename(path);
 		let timer: ReturnType<typeof setTimeout> | undefined;
-		const created = { watcher: undefined as FSWatcher | undefined, callbacks: new Set<NotesChangeCallback>() };
-		mkdirSync(dir, { recursive: true });
+		const created = { callbacks: new Set<NotesChangeCallback>() };
 		const notify = (): void => {
 			timer = undefined;
 			const newState = readState(path);
@@ -192,20 +199,28 @@ export function watchNotes(projectPath: string, callback: NotesChangeCallback, e
 				}
 			}
 		};
-		const watcher = watch(dir, { persistent: true }, (_eventType, filename) => {
-			// `filename` is null on some platforms: treat it as "this file changed".
-			if (filename !== null && filename !== target && !filename.startsWith(`.${target}.`)) return;
-			if (timer) clearTimeout(timer);
-			timer = setTimeout(notify, WATCH_DEBOUNCE_MS);
-		});
+		let watcher: FSWatcher;
+		try {
+			mkdirSync(dir, { recursive: true });
+			watcher = watch(dir, { persistent: true }, (_eventType, filename) => {
+				// `filename` is null on some platforms: treat it as "this file changed".
+				if (filename !== null && filename !== target && !filename.startsWith(`.${target}.`)) return;
+				if (timer) clearTimeout(timer);
+				timer = setTimeout(notify, WATCH_DEBOUNCE_MS);
+			});
+		} catch {
+			// Best effort by contract: a config home that cannot be created or
+			// watched (EACCES, ENOTDIR, a broken mount) must not throw out of
+			// session start. The session simply runs without live sync.
+			return () => {};
+		}
 		// A watcher error (the directory vanished, the process is out of inotify
 		// handles) must never break the session: the UI just stops auto-syncing.
 		watcher.on("error", () => {});
 		// Never hold the event loop open: a Pi session keeps its own handles, and
 		// a test or a short script must be able to exit with a watcher alive.
 		watcher.unref();
-		created.watcher = watcher;
-		entry = { watcher: created.watcher, callbacks: created.callbacks };
+		entry = { watcher, callbacks: created.callbacks };
 		watchers.set(path, entry);
 	}
 	entry.callbacks.add(callback);

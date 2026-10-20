@@ -195,6 +195,36 @@ describe("isNotesState", () => {
 	assert.equal(isNotesState(malformed), false, "a non boolean history flag is rejected");
 });
 
+	it("keeps the persisted view state when a note is added (D4)", () => {
+		// The collapsed/folded/sent flags ride in the same file as the notes; a
+		// capture must not wipe what the session persisted, or every new note
+		// reopens the rail and every restart starts from scratch.
+		const withUi = setUIState(emptyNotes(), { railCollapsed: true, foldAll: true });
+		assert.ok(typeof withUi !== "string", "the view state is accepted");
+		const added = addNote((withUi as { state: Parameters<typeof addNote>[0] }).state, "una nota que llega", 1);
+		assert.ok(typeof added !== "string", "the note is accepted");
+		const ui = (added as { state: { ui?: { railCollapsed?: boolean; foldAll?: boolean } } }).state.ui;
+		assert.equal(ui?.railCollapsed, true, "the collapsed rail survives the add");
+		assert.equal(ui?.foldAll, true, "the folded view survives the add");
+	});
+
+	it("rejects duplicate ids and a nextId that does not beat every id (P1.3)", () => {
+		const first = { id: 1, text: "primera", status: NOTE_STATUS.PENDING, createdAt: 1 };
+		const duplicate = { id: 1, text: "segunda", status: NOTE_STATUS.PENDING, createdAt: 2 };
+		assert.equal(
+			isNotesState({ notes: [first, duplicate], nextId: 2 }),
+			false,
+			"two notes sharing an id would make deleteNote remove both",
+		);
+		assert.equal(
+			isNotesState({ notes: [first], nextId: 1 }),
+			false,
+			"a rewound nextId would hand out an id that is already taken",
+		);
+		assert.equal(isNotesState({ notes: [first], nextId: 2 }), true, "the next id still beats every stored id");
+		assert.equal(isNotesState({ notes: [{ ...first, id: 4 }], nextId: 5 }), true, "ids need not be contiguous");
+	});
+
 it("requires sentAt for sent notes and rejects it for pending notes", () => {
 		assert.equal(isNotesState({ notes: [{ id: 1, text: "a", status: "sent", createdAt: 1 }], nextId: 2 }), false);
 		assert.equal(
