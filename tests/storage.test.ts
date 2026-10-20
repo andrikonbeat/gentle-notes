@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -12,6 +12,7 @@ import {
 	notesFilePath,
 	projectSlug,
 	saveNotes,
+	watchNotes,
 } from "../src/storage.ts";
 
 function unwrap<V>(result: V | string): V {
@@ -188,5 +189,83 @@ describe("mutateNotes", () => {
 		assert.deepEqual(loadNotes(project, env), state);
 		// No atomic-rename churn: the same file entry remains.
 		assert.deepEqual(readdirSync(join(base, "notes")), before);
+	});
+	it("creates its own store directory 0700 and the file 0600", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		await mutateNotes(project, (current) => addNote(current, "privada", 1), env);
+		const dir = dirname(notesFilePath(project, env));
+		const mode = (path: string): number => statSync(path).mode & 0o777;
+		// Notes can hold anything the user pasted, so the store follows the same
+		// rule as every gentle-shell store: owner only.
+		assert.equal(mode(notesFilePath(project, env)), 0o600, "the notes file is owner read/write");
+		assert.equal(mode(dir), 0o700, "the directory that holds it is owner only");
+	});
+
+	it("preserves an unreadable store instead of overwriting it", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const path = notesFilePath(project, env);
+		mkdirSync(dirname(path), { recursive: true });
+		const garbage = "{ this is not json";
+		writeFileSync(path, garbage, "utf8");
+		assert.deepEqual(loadNotes(project, env), emptyNotes(), "an unreadable file degrades to empty");
+
+		await mutateNotes(project, (current) => addNote(current, "sobrevive", 1), env);
+
+		const backup = readdirSync(dirname(path)).find((name) => name.includes("corrupt"));
+		assert.ok(backup, `the unreadable payload is kept aside: ${JSON.stringify(readdirSync(dirname(path)))}`);
+		assert.equal(readFileSync(join(dirname(path), backup as string), "utf8"), garbage, "byte for byte");
+		assert.equal(loadNotes(project, env).notes[0]?.text, "sobrevive", "the store is usable again");
+	});
+
+	it("sets aside a store it cannot read instead of overwriting it", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const path = notesFilePath(project, env);
+		mkdirSync(dirname(path), { recursive: true });
+		const original = JSON.stringify({ notes: [], nextId: 7 });
+		writeFileSync(path, original, "utf8");
+		// A file that exists but cannot be read (EACCES) is not the same as a
+		// missing one: the next save must not clobber what it could not see.
+		chmodSync(path, 0o000);
+		try {
+			await mutateNotes(project, (current) => addNote(current, "sobrevive", 7), env);
+		} finally {
+			chmodSync(path, 0o600);
+		}
+		const dir = dirname(path);
+		const backup = readdirSync(dir).find((name) => name.includes("corrupt"));
+		assert.ok(backup, `the unreadable payload is kept aside: ${JSON.stringify(readdirSync(dir))}`);
+		// The rename keeps the original mode, so the backup is as unreadable as
+		// the file was: reopen it to prove the bytes survived.
+		const backupPath = join(dir, backup as string);
+		chmodSync(backupPath, 0o600);
+		assert.equal(readFileSync(backupPath, "utf8"), original, "byte for byte");
+		assert.equal(loadNotes(project, env).notes[0]?.text, "sobrevive", "the store is usable again");
+	});
+
+	it("keeps the other watchers alive when one subscriber throws", async () => {
+		const base = newBase();
+		const env = { GENTLE_PI_CONFIG_HOME: base };
+		const project = newProject(base);
+		const seen: string[] = [];
+		const stopThrowing = watchNotes(project, () => {
+			throw new Error("subscriber blew up");
+		}, env);
+		const stopOk = watchNotes(project, (state) => {
+			seen.push(`ok:${state.notes.length}`);
+		}, env);
+		try {
+			await mutateNotes(project, (current) => addNote(current, "a", 1), env);
+			for (let i = 0; i < 40 && seen.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+			assert.deepEqual(seen, ["ok:1"], "the healthy subscriber still hears about the change");
+		} finally {
+			stopThrowing();
+			stopOk();
+		}
 	});
 });

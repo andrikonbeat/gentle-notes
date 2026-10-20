@@ -3,14 +3,20 @@ import { describe, it } from "node:test";
 import {
 	NOTE_STATUS,
 	addNote,
+	clearByStatus,
 	clearNotes,
 	deleteNote,
 	emptyNotes,
 	isNotesState,
 	markSent,
+	MAX_NOTE_LENGTH,
 	notesSummary,
+	restoreNote,
+	setUIState,
+	stripWrappingQuotes,
 	updateNoteText,
 	type NoteTask,
+	type NotesState,
 } from "../src/notes-state.ts";
 
 /** Test helper: fail loudly when a pure function returned an error string. */
@@ -180,7 +186,16 @@ describe("isNotesState", () => {
 		for (const value of bad) assert.equal(isNotesState(value), false);
 	});
 
-	it("requires sentAt for sent notes and rejects it for pending notes", () => {
+	it("validates the history flag without requiring it", () => {
+	const history = { notes: [{ id: 1, text: "a", status: NOTE_STATUS.PENDING, createdAt: 1, everSent: true }], nextId: 2 };
+	assert.equal(isNotesState(history), true);
+	const legacy = { notes: [{ id: 1, text: "a", status: NOTE_STATUS.PENDING, createdAt: 1 }], nextId: 2 };
+	assert.equal(isNotesState(legacy), true, "a store written before the flag stays readable");
+	const malformed = { notes: [{ id: 1, text: "a", status: NOTE_STATUS.PENDING, createdAt: 1, everSent: "yes" }], nextId: 2 };
+	assert.equal(isNotesState(malformed), false, "a non boolean history flag is rejected");
+});
+
+it("requires sentAt for sent notes and rejects it for pending notes", () => {
 		assert.equal(isNotesState({ notes: [{ id: 1, text: "a", status: "sent", createdAt: 1 }], nextId: 2 }), false);
 		assert.equal(
 			isNotesState({ notes: [{ id: 1, text: "a", status: "pending", createdAt: 1, sentAt: 5 }], nextId: 2 }),
@@ -234,3 +249,160 @@ describe("updateNoteText", () => {
 		assert.equal(JSON.stringify(state), before);
 	});
 });
+
+describe("stripWrappingQuotes", () => {
+	it("unwraps one matched double-quote pair", () => {
+		assert.equal(stripWrappingQuotes('"comprar leche"'), "comprar leche");
+	});
+
+	it("unwraps one matched single-quote pair and curly quotes", () => {
+		assert.equal(stripWrappingQuotes("'revisar el footer'"), "revisar el footer");
+		assert.equal(stripWrappingQuotes("\u201crevisar el header\u201d"), "revisar el header");
+	});
+
+	it("trims around the pair", () => {
+		assert.equal(stripWrappingQuotes('   "con aire"   '), "con aire");
+	});
+
+	it("keeps a lone quote, an unbalanced pair and mixed marks", () => {
+		assert.equal(stripWrappingQuotes('un "lone mark'), 'un "lone mark');
+		assert.equal(stripWrappingQuotes('"abre sin cerrar'), '"abre sin cerrar');
+		assert.equal(stripWrappingQuotes('"mixto\''), '"mixto\'');
+	});
+
+	it("leaves plain text and short input untouched", () => {
+		assert.equal(stripWrappingQuotes("sin comillas"), "sin comillas");
+		assert.equal(stripWrappingQuotes('"'), '"');
+		assert.equal(stripWrappingQuotes(""), "");
+	});
+});
+
+describe("restoreNote", () => {
+	it("returns a sent note to pending and clears sentAt", () => {
+		const sent = unwrap(markSent(unwrap(addNote(emptyNotes(), "pendiente", 10)).state, 1, 20)).state;
+		const restored = unwrap(restoreNote(sent, 1)).state;
+		assert.equal(restored.notes[0]?.status, NOTE_STATUS.PENDING);
+		assert.equal(restored.notes[0]?.sentAt, undefined);
+	});
+
+	it("remembers that the note travelled once it is pending again", () => {
+		const sent = unwrap(markSent(unwrap(addNote(emptyNotes(), "una tarea", 10)).state, 1, 20)).state;
+		assert.equal(sent.notes[0]?.everSent, true, "sending records the history");
+		const restored = unwrap(restoreNote(sent, 1)).state;
+		assert.equal(restored.notes[0]?.status, NOTE_STATUS.PENDING);
+		assert.equal(restored.notes[0]?.sentAt, undefined, "the send instant is still cleared");
+		assert.equal(restored.notes[0]?.everSent, true, "the memory of having travelled survives");
+	});
+
+	it("refuses an unknown id and a note that is already pending", () => {
+		assert.equal(restoreNote(emptyNotes(), 7), "no note #7");
+		const pending = unwrap(addNote(emptyNotes(), "sigue pendiente", 10)).state;
+		assert.equal(restoreNote(pending, 1), "note #1 is already pending");
+	});
+});
+
+describe("setUIState", () => {
+	it("merges a partial view state into the notes state", () => {
+		const state = unwrap(setUIState(emptyNotes(), { foldAll: true })).state;
+		assert.deepEqual(state.ui, { foldAll: true });
+		const next = unwrap(setUIState(state, { sentCollapsed: true })).state;
+		assert.deepEqual(next.ui, { foldAll: true, sentCollapsed: true });
+	});
+
+	it("keeps the notes untouched", () => {
+		const withNote = unwrap(addNote(emptyNotes(), "intacta", 10)).state;
+		const state = unwrap(setUIState(withNote, { railCollapsed: true })).state;
+		assert.deepEqual(state.notes, withNote.notes);
+	});
+});
+
+describe("isNotesState ui payload", () => {
+	it("accepts a state carrying a valid ui block", () => {
+		assert.ok(isNotesState({ notes: [], nextId: 1, ui: { railCollapsed: true, foldAll: false, foldOverrides: { 3: true }, sentCollapsed: true } }));
+	});
+
+	it("rejects wrong ui field types and bad override keys", () => {
+		assert.equal(isNotesState({ notes: [], nextId: 1, ui: { railCollapsed: "yes" } }), false);
+		assert.equal(isNotesState({ notes: [], nextId: 1, ui: { foldAll: 1 } }), false);
+		assert.equal(isNotesState({ notes: [], nextId: 1, ui: { foldOverrides: { abc: true } } }), false);
+		assert.equal(isNotesState({ notes: [], nextId: 1, ui: { foldOverrides: { 3: "si" } } }), false);
+		assert.equal(isNotesState({ notes: [], nextId: 1, ui: null }), false);
+	});
+});
+
+describe("clearByStatus", () => {
+	const mixed = (): NotesState => {
+		let state = unwrap(addNote(emptyNotes(), "queda pendiente", 1)).state;
+		state = unwrap(addNote(state, "se manda", 2)).state;
+		state = unwrap(markSent(state, 2, 3)).state;
+		state = unwrap(addNote(state, "otra pendiente", 4)).state;
+		return unwrap(setUIState(state, { foldAll: true })).state;
+	};
+
+	it("removes only the sent notes and reports how many went", () => {
+		const result = clearByStatus(mixed(), NOTE_STATUS.SENT);
+		assert.equal(result.removed, 1);
+		assert.deepEqual(result.state.notes.map((note) => note.text), ["queda pendiente", "otra pendiente"]);
+	});
+
+	it("removes only the pending notes", () => {
+		const result = clearByStatus(mixed(), NOTE_STATUS.PENDING);
+		assert.equal(result.removed, 2);
+		assert.deepEqual(result.state.notes.map((note) => note.text), ["se manda"]);
+	});
+
+	it("keeps the id counter and the view flags", () => {
+		const state = mixed();
+		const result = clearByStatus(state, NOTE_STATUS.SENT).state;
+		assert.equal(result.nextId, state.nextId, "ids never rewind");
+		assert.deepEqual(result.ui, { foldAll: true }, "the view flags survive a scoped clear");
+	});
+
+	it("returns the same state object when the group is empty", () => {
+		const pendingOnly = unwrap(addNote(emptyNotes(), "solo pendiente", 1)).state;
+		const result = clearByStatus(pendingOnly, NOTE_STATUS.SENT);
+		assert.equal(result.removed, 0);
+		assert.equal(result.state, pendingOnly, "an unchanged state skips the write");
+	});
+
+	it("does not mutate the input state", () => {
+		const state = mixed();
+		const before = JSON.stringify(state);
+		clearByStatus(state, NOTE_STATUS.PENDING);
+		assert.equal(JSON.stringify(state), before);
+	});
+	it("strips control and bidi characters before they reach the store", () => {
+		const result = addNote(emptyNotes(), "hola\u009b2J\u202Eevil\u200Bworld", 1);
+		assert.ok(typeof result !== "string", String(result));
+		// C1 (the 8-bit form of ESC), the right-to-left override and a zero-width
+		// space never reach the JSON, the render or the terminal.
+		assert.equal(result.note.text, "hola2Jevilworld");
+	});
+
+	it("keeps the zero-width joiner so emoji and complex scripts survive", () => {
+		const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+		const result = addNote(emptyNotes(), family, 1);
+		assert.ok(typeof result !== "string", String(result));
+		assert.equal(result.note.text, family, "ZWJ is content, not control");
+	});
+
+	it("rejects a note longer than the limit instead of storing it", () => {
+		const state = emptyNotes();
+		const tooLong = addNote(state, "x".repeat(MAX_NOTE_LENGTH + 1), 1);
+		assert.equal(typeof tooLong, "string");
+		assert.match(String(tooLong), /too long/);
+		assert.match(String(tooLong), new RegExp(`max ${MAX_NOTE_LENGTH}`));
+		const atLimit = addNote(state, "x".repeat(MAX_NOTE_LENGTH), 1);
+		assert.ok(typeof atLimit !== "string", "exactly the limit is accepted");
+	});
+
+	it("refuses an edit that would exceed the limit and leaves the note untouched", () => {
+		const built = addNote(emptyNotes(), "corta", 1);
+		assert.ok(typeof built !== "string");
+		const edited = updateNoteText(built.state, 1, "y".repeat(MAX_NOTE_LENGTH + 1));
+		assert.equal(typeof edited, "string");
+		assert.match(String(edited), /too long/);
+		assert.equal(built.state.notes[0].text, "corta");
+	});
+});
+
