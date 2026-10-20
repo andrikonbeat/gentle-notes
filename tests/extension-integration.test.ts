@@ -7,7 +7,7 @@
 // real storage queue under a temp config home. The fake theme emits real ANSI
 // escapes, like Pi's themes, so the card measures rows exactly as live.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -261,6 +261,27 @@ function mouse(type: string, x: number, y: number, width: number, wheelDelta?: n
 	} as TuiMouseEvent;
 }
 
+/** Every visible column a glyph appears at on a rendered row, ANSI skipped. */
+function glyphColumnsAt(line: string, glyph: string): number[] {
+	const columns: number[] = [];
+	let column = 0;
+	let index = 0;
+	while (index < line.length) {
+		if (line[index] === "\x1b") {
+			const match = /^\x1b\[[0-9;?]*[A-Za-z]/.exec(line.slice(index));
+			if (match) {
+				index += match[0].length;
+				continue;
+			}
+		}
+		const character = String.fromCodePoint(line.codePointAt(index) as number);
+		if (character === glyph) columns.push(column);
+		column += visibleWidth(character);
+		index += character.length;
+	}
+	return columns;
+}
+
 /** The rendered row that carries the clickable send glyph. */
 function glyphRow(lines: string[]): { row: number; column: number } {
 	const row = lines.findIndex((line) => line.includes("➤"));
@@ -360,6 +381,25 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(header.includes("\x1b[48;5;22m"), "the compact line carries the panel background");
 	});
 
+	it("starts the session when the notes directory cannot be created (P1.2)", async () => {
+		// The store's parent path exists but is a regular file, so the watcher's
+		// mkdirSync fails (ENOTDIR here, EACCES on an unwritable home): the same
+		// shape as an unwritable config home, without needing root.
+		const blocked = join(configHome, "blocked");
+		writeFileSync(blocked, "not a directory", "utf8");
+		process.env.GENTLE_PI_CONFIG_HOME = blocked;
+
+		// session_start must survive it: no throw out of the handler, the widget
+		// still installs, and the wiring keeps answering — without live sync.
+		await harness.sessionStart(project);
+		const widget = harness.buildWidget();
+		assert.doesNotThrow(() => widget.render(80), "the compact row still renders");
+		await harness.runCommand("add todavia responde", project);
+		const error = harness.notifies.find((entry) => entry.type === "error");
+		assert.ok(error, `the unwritable store is reported once, as an error: ${JSON.stringify(harness.notifies)}`);
+		await harness.sessionShutdown();
+	});
+
 	it("renders nothing in the compact row while the project has no notes", async () => {
 		await harness.sessionStart(project);
 		const widget = harness.buildWidget();
@@ -380,6 +420,30 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(expanded.join("\n").includes("compactable"), "the expanded list shows the note");
 		widget.handleMouse?.(mouse("click", 10, 1, 80));
 		assert.equal(widget.render(80).length, 2, "collapsing returns the one-line summary with its air");
+	});
+
+	it("expands the compact row from its control in the outlined style (P1.5)", async () => {
+		const slot = Symbol.for("gentle-pi.card-style");
+		const previous = (globalThis as Record<symbol, unknown>)[slot];
+		(globalThis as Record<symbol, unknown>)[slot] = "neon";
+		try {
+			await harness.sessionStart(project);
+			await harness.runCommand("add visible en neon", project);
+			const widget = harness.buildWidget();
+			const collapsed = widget.render(80);
+			assert.equal(collapsed.length, 3, `the outlined frame plus its air row: ${JSON.stringify(collapsed)}`);
+			const control = controlSpan(collapsed[0] ?? "", "▸ Expand");
+			assert.ok(control, `the outlined header paints the control: ${JSON.stringify(collapsed[0])}`);
+
+			const click = widget.handleMouse?.(mouse("click", control.start, 0, 80));
+			assert.equal(click?.handled, true, "the control owns the click");
+			const expanded = widget.render(80);
+			assert.ok(expanded.length > collapsed.length, "the compact row grows into the list");
+			assert.ok(expanded.join("\n").includes("visible en neon"), `the list paints the note: ${expanded.join(" | ")}`);
+		} finally {
+			if (previous === undefined) delete (globalThis as Record<symbol, unknown>)[slot];
+			else (globalThis as Record<symbol, unknown>)[slot] = previous;
+		}
 	});
 
 	it("previews the last written note on the compact line (L23)", async () => {
@@ -556,6 +620,63 @@ describe("gentle-notes extension wiring", () => {
 		const painted = output.join("\n");
 		assert.ok(painted.includes("MARCAFINAL"), "the text being typed stays visible");
 		assert.ok(!painted.includes("PRINCIPIO"), "the field scrolled past the head of the capture");
+	});
+
+	it("keeps the rejected draft in the field instead of clearing it (P1.1)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		// A capture over the limit is refused by the store, not truncated: the
+		// field has to keep what the user wrote so they can edit it down.
+		rail.handleInput?.(`PRINCIPIO ${"y".repeat(MAX_NOTE_LENGTH)}COLATAIL`);
+		rail.handleInput?.("\r");
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes, [], "the rejected note is not stored");
+		assert.ok(
+			harness.notifies.some((entry) => entry.message.includes("too long")),
+			`the rejection is reported: ${JSON.stringify(harness.notifies)}`,
+		);
+		const painted = rail.render(46).join("\n");
+		assert.ok(painted.includes("COLATAIL"), "the rejected text stays in the field instead of vanishing");
+
+		// The clear still happens where it belongs: a save the store accepted.
+		rail.handleInput?.("\x15"); // ctrl+u clears the editor line
+		rail.handleInput?.("nota corta aceptada");
+		rail.handleInput?.("\r");
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes.map((note) => note.text), ["nota corta aceptada"]);
+		// The note paints in the list; the field that carried it is empty again,
+		// so the text appears exactly once.
+		const occurrences = rail.render(46).join("\n").split("nota corta aceptada").length - 1;
+		assert.equal(occurrences, 1, "an accepted save still clears the field");
+	});
+
+	it("does not repaint the draft when a post-write notify throws (D1)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		rail.render(46);
+		rail.handleMouse?.(mouse("click", 5, 3, 46));
+		// A notify that throws *after* the store took the note must not travel
+		// back as "the note was refused": the draft comes back, the next Enter
+		// saves it again, and the user ends up with two identical notes.
+		const realPush = harness.notifies.push.bind(harness.notifies);
+		let armed = true;
+		harness.notifies.push = (...entries: { message: string; type?: string }[]) => {
+			if (armed && entries.some((entry) => entry.message === "Note saved")) {
+				armed = false;
+				throw new Error("notify blew up after the write landed");
+			}
+			return realPush(...entries);
+		};
+		rail.handleInput?.("una nota que si llega al store");
+		rail.handleInput?.("\r");
+		await FLUSH();
+		assert.equal(loadNotes(project).notes.length, 1, "the store took the note exactly once");
+		const painted = rail.render(46).join("\n");
+		assert.equal(painted.split("una nota que si llega al store").length - 1, 1, "a notify failure does not put a saved draft back in the field");
 	});
 
 	it("carries both header controls with their actions (S8)", async () => {
@@ -755,6 +876,32 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(reopened.some((line) => line.includes("queda enviada")), "expanding brings the row back");
 		const reopenedRow = headerRow(reopened);
 		assert.ok(reopened[reopenedRow]?.includes("Collapse"), `and the control stays reachable: ${reopened.join(" | ")}`);
+	});
+
+	it("keeps the restore target on the affordance when the note paints one itself (P1.4)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add repasar el ↶ del rail despues", project);
+		harness.buildWidget();
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+
+		const sent = rail.render(46);
+		const sentRow = sent.findIndex((line) => line.includes("repasar el"));
+		assert.ok(sentRow >= 0, `the sent row paints: ${JSON.stringify(sent)}`);
+		const columns = glyphColumnsAt(sent[sentRow] as string, "↶");
+		assert.equal(columns.length, 2, `the note's own glyph and the affordance: ${JSON.stringify(sent[sentRow])}`);
+		const [inText, affordance] = columns as [number, number];
+
+		// The glyph inside the note's text is content, not a button.
+		rail.handleMouse?.(mouse("click", inText, sentRow, 46));
+		await FLUSH();
+		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.SENT, "the text's own glyph does not restore the note");
+
+		rail.handleMouse?.(mouse("click", affordance, sentRow, 46));
+		await FLUSH();
+		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.PENDING, "the affordance at the row's end still restores");
 	});
 
 	it("restores a sent note from its row's restore glyph", async () => {

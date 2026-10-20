@@ -11,7 +11,7 @@
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { NOTE_STATUS, notesSummary, stripControlSequences, type NoteTask, type NotesState, type NotesSummary } from "./notes-state.ts";
-import { CARD_TONE, panelBodyWidth, panelExtraRows, panelFloatApplies, panelHeaderRow, panelInnerWidth, paintPanelRows, renderCardPanel, renderPanelHeaderLine, type PanelCard } from "./card-chrome.ts";
+import { CARD_TONE, panelBodyWidth, panelExtraRows, panelHeaderRow, panelInnerWidth, paintPanelRows, renderCardPanel, renderPanelHeaderLine, type PanelCard } from "./card-chrome.ts";
 
 export const NOTE_GLYPH = {
 	pending: "✉",
@@ -142,7 +142,7 @@ export function pendingRowLines(note: NoteTask, theme: NotesCardTheme, inner: nu
 	// Folded the note keeps one row: the first line, ellipsized when the note
 	// goes on, padded to the text column so the send glyph holds its place and
 	// the click target lands where the unfolded row had it.
-	const head = folded ? foldedText(first, rest, width).padEnd(width) : first.padEnd(width);
+	const head = folded ? padToColumns(foldedText(first, rest, width), width) : padToColumns(first, width);
 	const lines = [
 		`${theme.fg("accent", NOTE_GLYPH.pending)}${" ".repeat(GLYPH_GAP)}${theme.fg("text", head)}${" ".repeat(GLYPH_GAP)}${theme.fg(sendRole, SEND_GLYPH)}${" ".repeat(GLYPH_GAP)}${theme.fg(deleteRole, recycled ? REVERT_GLYPH : DELETE_GLYPH)}`,
 	];
@@ -162,13 +162,23 @@ export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: numbe
 	const segments = wrapNoteText(sanitizeNoteText(note.text), width);
 	const [first = "", ...rest] = segments;
 	const restoreRole = restoreHoveredId === note.id ? "accent" : "muted";
-	const head = folded ? foldedText(first, rest, width).padEnd(width) : first.padEnd(width);
+	const head = folded ? padToColumns(foldedText(first, rest, width), width) : padToColumns(first, width);
 	const lines = [
 		`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("dim", theme.strikethrough(head))}${" ".repeat(GLYPH_GAP)}${theme.fg(restoreRole, RESTORE_GLYPH)}`,
 	];
 	if (folded) return lines;
 	for (const segment of rest) lines.push(`${" ".repeat(GLYPH_GAP + 1)}${theme.fg("dim", theme.strikethrough(segment))}`);
 	return lines;
+}
+
+/** Pad a painted row to `width` visible columns. `padEnd` counts UTF-16 code
+ * units, so a note carrying a double-width character (CJK, emoji) came out
+ * wider than its column budget; the card clips in columns, and the trailing
+ * affordance — the whole click target — fell off the row. Text that already
+ * fills or overflows the budget simply gets no padding. */
+function padToColumns(text: string, width: number): string {
+	const pad = width - visibleWidth(text);
+	return pad > 0 ? `${text}${" ".repeat(pad)}` : text;
 }
 
 /** The card body plus its hit map: pending rows first, sent rows last, folding
@@ -252,7 +262,7 @@ export function collapsedNoteRow(state: NotesState, theme: NotesCardTheme, inner
 	const width = Math.max(1, inner - GLYPH_GAP * 2);
 	const note = state.notes.find((candidate) => candidate.status === NOTE_STATUS.PENDING)
 		?? state.notes.find((candidate) => candidate.status === NOTE_STATUS.SENT);
-	if (!note) return [theme.fg("muted", "No notes".padEnd(width))];
+	if (!note) return [theme.fg("muted", padToColumns("No notes", width))];
 	const [first = "", ...rest] = wrapNoteText(sanitizeNoteText(note.text), width);
 	const text = foldedText(first, rest, width);
 	if (note.status === NOTE_STATUS.SENT) return [`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("dim", theme.strikethrough(text))}`];
@@ -282,84 +292,12 @@ const ANSI_OR_CONTROL = /^\x1b\[[0-9;?]*[A-Za-z]/;
  * Hit-testing reads the glyph position off the rendered line itself, so the
  * click target stays correct in every card style.
  */
-function glyphColumnOf(line: string, glyph: string): number | undefined {
-	let column = 0;
-	let index = 0;
-	while (index < line.length) {
-		if (line[index] === "\x1b") {
-			const match = ANSI_OR_CONTROL.exec(line.slice(index));
-			if (match) {
-				index += match[0].length;
-				continue;
-			}
-		}
-		const codePoint = line.codePointAt(index) as number;
-		const character = String.fromCodePoint(codePoint);
-		if (character === glyph) return column;
-		column += visibleWidth(character);
-		index += character.length;
-	}
-	return undefined;
-}
-
-/** Visible column (0-based) where the send glyph starts in a rendered row;
- * undefined when the row has no send glyph. */
-export function sendGlyphColumn(line: string): number | undefined {
-	return glyphColumnOf(line, SEND_GLYPH);
-}
-
-/** Visible column (0-based) where the row's delete affordance starts (L27);
- * undefined when the row has no delete glyph. */
-export function deleteGlyphColumn(line: string): number | undefined {
-	return glyphColumnOf(line, DELETE_GLYPH);
-}
-
-export function revertGlyphColumn(line: string): number | undefined {
-	return glyphColumnOf(line, REVERT_GLYPH);
-}
-
-/** The column of a pending row's trailing affordance, whichever it paints:
- * × for a note that never travelled, ✓ for one that came back. The *last*
- * match is the affordance — the text always sits before it — so a note that
- * itself contains a ✓ or a × cannot move the target, and the row's chrome
- * (borders, padding) after it cannot either. Callers read it off a row the
- * hit maps vouch for. */
-export function trailingGlyphColumn(line: string): number | undefined {
-	let column = 0;
-	let index = 0;
-	let last: number | undefined;
-	while (index < line.length) {
-		if (line[index] === "\x1b") {
-			const match = ANSI_OR_CONTROL.exec(line.slice(index));
-			if (match) {
-				index += match[0].length;
-				continue;
-			}
-		}
-		const codePoint = line.codePointAt(index) as number;
-		const character = String.fromCodePoint(codePoint);
-		if (character === DELETE_GLYPH || character === REVERT_GLYPH) last = column;
-		column += visibleWidth(character);
-		index += character.length;
-	}
-	return last;
-}
-
-/** Visible column (0-based) where a sent row's restore affordance starts;
- * undefined when the row carries no restore glyph. */
-export function restoreGlyphColumn(line: string): number | undefined {
-	return glyphColumnOf(line, RESTORE_GLYPH);
-}
-
-/**
- * Visible column span of a control needle inside a rendered row, skipping ANSI
- * escapes and measuring in columns, so the click target stays correct in every
- * card style. Searches from `from` so two identical chevrons (collapsed block,
- * folded notes) can be told apart by order.
- */
-export function controlSpan(line: string, needle: string, from = 0): { start: number; end: number } | undefined {
-	if (needle.length === 0) return undefined;
-	const cells: { ch: string; column: number; width: number }[] = [];
+/** Walks a rendered row glyph by glyph, reporting each one with the visible
+ * column it starts at and the cells it occupies, while skipping ANSI escape
+ * sequences. Every affordance column in this module reads rows through this one
+ * walk: escapes, astral code points and double-width cells are handled in a
+ * single place instead of four copies that could drift apart. */
+function eachGlyph(line: string, visit: (character: string, column: number, width: number) => void): void {
 	let index = 0;
 	let column = 0;
 	while (index < line.length) {
@@ -373,10 +311,80 @@ export function controlSpan(line: string, needle: string, from = 0): { start: nu
 		const codePoint = line.codePointAt(index) as number;
 		const character = String.fromCodePoint(codePoint);
 		const width = visibleWidth(character);
-		cells.push({ ch: character, column, width });
+		visit(character, column, width);
 		column += width;
 		index += character.length;
 	}
+}
+
+/** Visible column (0-based) where a row's send affordance starts; undefined
+ * when the row has no send glyph. The *last* match is the affordance: the note's
+ * text is always painted before it, so a pending note whose own text carries a
+ * `➤` cannot move the click target. */
+export function sendGlyphColumn(line: string): number | undefined {
+	return lastGlyphColumnOf(line, SEND_GLYPH);
+}
+
+/** Visible column (0-based) where the row's delete affordance starts (L27);
+ * undefined when the row has no delete glyph. Last match, for the same reason
+ * as the send affordance. */
+export function deleteGlyphColumn(line: string): number | undefined {
+	return lastGlyphColumnOf(line, DELETE_GLYPH);
+}
+
+/** Visible column (0-based) where the row's back-to-sent affordance starts;
+ * undefined when the row carries no revert glyph. Last match, for the same
+ * reason as the send affordance. */
+export function revertGlyphColumn(line: string): number | undefined {
+	return lastGlyphColumnOf(line, REVERT_GLYPH);
+}
+
+/** The column of a pending row's trailing affordance, whichever it paints:
+ * × for a note that never travelled, ✓ for one that came back. The *last*
+ * match is the affordance — the text always sits before it — so a note that
+ * itself contains a ✓ or a × cannot move the target, and the row's chrome
+ * (borders, padding) after it cannot either. Callers read it off a row the
+ * hit maps vouch for. */
+export function trailingGlyphColumn(line: string): number | undefined {
+	let last: number | undefined;
+	eachGlyph(line, (character, column) => {
+		if (character === DELETE_GLYPH || character === REVERT_GLYPH) last = column;
+	});
+	return last;
+}
+
+/** Visible column (0-based) where the *last* occurrence of a glyph starts in a
+ * rendered row, skipping ANSI escape sequences; undefined when the row has no
+ * such glyph. A row whose text may carry the glyph itself reads its affordance
+ * this way: the affordance is always painted after the text, so the last match
+ * is the button and the note can never move the target. */
+function lastGlyphColumnOf(line: string, glyph: string): number | undefined {
+	let last: number | undefined;
+	eachGlyph(line, (character, column) => {
+		if (character === glyph) last = column;
+	});
+	return last;
+}
+
+/** Visible column (0-based) where a sent row's restore affordance starts;
+ * undefined when the row carries no restore glyph. The last match wins, for the
+ * same reason the trailing affordance does: a sent note whose own text contains
+ * `↶` sits before the glyph that is painted after the padded text, so reading
+ * the first match would let the note's content steal the click. */
+export function restoreGlyphColumn(line: string): number | undefined {
+	return lastGlyphColumnOf(line, RESTORE_GLYPH);
+}
+
+/**
+ * Visible column span of a control needle inside a rendered row, skipping ANSI
+ * escapes and measuring in columns, so the click target stays correct in every
+ * card style. Searches from `from` so two identical chevrons (collapsed block,
+ * folded notes) can be told apart by order.
+ */
+export function controlSpan(line: string, needle: string, from = 0): { start: number; end: number } | undefined {
+	if (needle.length === 0) return undefined;
+	const cells: { ch: string; column: number; width: number }[] = [];
+	eachGlyph(line, (character, column, width) => cells.push({ ch: character, column, width }));
 	const plain = cells.map((cell) => cell.ch).join("");
 	const at = plain.indexOf(needle, from);
 	if (at < 0) return undefined;
@@ -393,10 +401,11 @@ export const COMPACT_ROW_CAP = 8;
 
 /** The expand/collapse control in the Todos grammar: chevron plus label while
  * the header has room, painted with the hover role while the pointer is on it
- * and the accent role otherwise. */
-function expandControl(collapsed: boolean, hovered: boolean, theme: NotesCardTheme, labelFits: boolean): { styled: string; width: number } {
+ * and the accent role otherwise. `text` is the unstyled label: it doubles as the
+ * needle the click map finds on the rendered header row. */
+function expandControl(collapsed: boolean, hovered: boolean, theme: NotesCardTheme, labelFits: boolean): { text: string; styled: string; width: number } {
 	const text = `${collapsed ? "▸" : "▾"}${labelFits ? ` ${collapsed ? "Expand" : "Collapse"}` : ""}`;
-	return { styled: hovered ? theme.fg("warning", text) : theme.fg("accent", text), width: text.length };
+	return { text, styled: hovered ? theme.fg("warning", text) : theme.fg("accent", text), width: text.length };
 }
 
 export interface CompactNotesView {
@@ -440,9 +449,6 @@ export function buildCompactNotesRow(
 	const label = `${options.collapsed ? "▸" : "▾"} ${options.collapsed ? "Expand" : "Collapse"}`;
 	const labelFits = width >= CONTROL_LABEL_WIDTH && controlStart + label.length + 2 + visibleWidth(counts) <= inner;
 	const control = expandControl(options.collapsed, options.controlHovered === true, theme, labelFits);
-	const span = panelFloatApplies(theme, width) && controlStart + control.width <= inner
-		? { start: controlStart, end: controlStart + control.width - 1 }
-		: undefined;
 	// The last written note trails the counts, clipped to the room the header
 	// leaves after them: the preview grows with the window and never widens
 	// the row — the panel clips whatever is left over.
@@ -451,6 +457,11 @@ export function buildCompactNotesRow(
 	const last = state.notes[state.notes.length - 1];
 	const preview = last && previewRoom >= 4 ? ` — ${truncateToWidth(sanitizeNoteText(last.text), previewRoom - 3, "…")}` : "";
 	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle: `${counts}${preview}`, body: [], tone: CARD_TONE.INFO, glyph: "" };
+	// The control is hit-tested off the rendered header row, in both card
+	// styles: the outlined frame paints the same control inside its title, so a
+	// column derived from the float panel alone left it dead under NEON —
+	// painted, but impossible to click, and the compact list never opened.
+	//
 	// One blank row of air below keeps the widget off the chat input. No row
 	// above: pi already draws a single spacer ahead of the whole above-editor
 	// widget group, and the Todos card ends with its own blank row, so a
@@ -458,7 +469,7 @@ export function buildCompactNotesRow(
 	const spaced = (rows: string[], headerRow: number, hits: NotesCardHit[], sentHits: NotesCardHit[], bodyTotal: number): CompactNotesView => ({
 		rows: [...rows, ""],
 		headerRow,
-		control: span,
+		control: controlSpan(rows[headerRow] ?? "", control.text),
 		hits,
 		sentHits,
 		bodyTotal,

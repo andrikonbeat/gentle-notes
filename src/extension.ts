@@ -282,7 +282,23 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		refresh();
 	};
 
-	/** Read-modify-write through the storage queue, refreshing the UI after. */
+	/** Run a UI side effect whose failure must not reach the caller. Once the
+	 * store has taken a change, a notify or a repaint the host cannot draw (a
+	 * disposed widget, a closed transcript) must not report that change as
+	 * refused: a caller that offers the draft again on `false` would then save
+	 * the same note twice. The store stays the source of truth; the screen
+	 * catches up on the next paint. */
+	const quietly = (effect: () => void): void => {
+		try {
+			effect();
+		} catch {
+			// Nothing to do: the write already landed.
+		}
+	};
+
+	/** Read-modify-write through the storage queue, refreshing the UI after.
+	 * Returns whether the *store* took the change, never whether the
+	 * notification or the repaint worked. */
 	const apply = async (
 		mutator: (state: NotesState) => { state: NotesState } | string,
 		successMessage?: string,
@@ -290,13 +306,13 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		if (!projectCwd) return false;
 		try {
 			current = await mutateNotes(projectCwd, mutator);
-			if (successMessage) notify(successMessage);
-			refresh();
-			return true;
 		} catch (error) {
-			notify(`Error: ${error instanceof Error ? error.message : String(error)}`, "error");
+			quietly(() => notify(`Error: ${error instanceof Error ? error.message : String(error)}`, "error"));
 			return false;
 		}
+		if (successMessage) quietly(() => notify(successMessage));
+		quietly(() => refresh());
+		return true;
 	};
 
 	/** Send a pending note where the settings point it: straight to the agent,
@@ -357,8 +373,8 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		await apply((state) => markSent(state, id, Date.now()), `Note #${id} back in the sent list`);
 	};
 
-	const saveNote = async (text: string): Promise<void> => {
-		await apply((state) => addNote(state, stripWrappingQuotes(text), Date.now()), "Note saved");
+	const saveNote = async (text: string): Promise<boolean> => {
+		return apply((state) => addNote(state, stripWrappingQuotes(text), Date.now()), "Note saved");
 	};
 
 	const clearAll = async (): Promise<void> => {
@@ -448,8 +464,19 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		const input = new Editor(widgetTui as TUI, editorTheme);
 		const editInput = new Editor(widgetTui as TUI, editorTheme);
 		input.onSubmit = (text) => {
-			if (text.trim().length > 0) void saveNote(text);
-			input.setText("");
+			if (text.trim().length === 0) return;
+			// pi-tui's Editor empties itself inside submitValue, before it calls
+			// onSubmit, so the draft is already gone by the time the store
+			// answers. A refused save (a note over MAX_NOTE_LENGTH, an unwritable
+			// store) puts the text back instead of leaving the error notify on
+			// top of a blank field; a save that lands keeps the field clear for
+			// the next note, and never touches text typed while it was in flight.
+			const submitted = text;
+			void saveNote(submitted).then((saved) => {
+				if (saved || input.getText().length > 0) return;
+				input.setText(submitted);
+				refresh();
+			});
 		};
 		editInput.onSubmit = (text) => {
 			void commitEdit(text);
@@ -671,16 +698,14 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					const firstPending = view.hits.find((hit) => hit.row >= scroll.scrollTop && hit.row < scroll.scrollTop + visible.length);
 					const pendingColumn = firstPending === undefined ? undefined : trailingGlyphColumn(visible[firstPending.row - scroll.scrollTop] ?? "");
 					if (pendingColumn !== undefined) deleteSpan = { start: pendingColumn - 1, end: pendingColumn + 1 };
-					// The sent rows pad the same way and their ↶ has no twin in the
-					// sent grammar (their ✓ leads the row), so that one stays a plain
-					// glyph search over the window.
-					for (const row of visible) {
-						const column = restoreGlyphColumn(row);
-						if (column !== undefined) {
-							restoreSpan = { start: column - 1, end: column + 1 };
-							break;
-						}
-					}
+					// The sent rows pad the same way, so their ↶ shares one column as
+					// well. The row is taken from the sent hit map — a wrapped
+					// continuation row carries no affordance, and the note's own text
+					// may contain the glyph — and `restoreGlyphColumn` reads the last
+					// match on it, so nothing inside the text can move the target.
+					const firstSent = view.sentHits.find((hit) => hit.row >= scroll.scrollTop && hit.row < scroll.scrollTop + visible.length);
+					const sentColumn = firstSent === undefined ? undefined : restoreGlyphColumn(visible[firstSent.row - scroll.scrollTop] ?? "");
+					if (sentColumn !== undefined) restoreSpan = { start: sentColumn - 1, end: sentColumn + 1 };
 				}
 				// The sent section control lives in the body, not in the header:
 				// its span comes from the painted row it landed on, which is only

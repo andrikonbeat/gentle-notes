@@ -260,10 +260,44 @@ describe("sentRowLines", () => {
 		]);
 	});
 
+	it("keeps the affordances on the row when the note carries wide characters (D2)", () => {
+		// padEnd counts UTF-16 code units while the card clips in columns, so a
+		// double-width character used to push the affordance off the row: the
+		// send/restore target vanished, and a note painting the glyph itself
+		// could take the click instead.
+		const ansi: NotesCardTheme = {
+			fg: (role, text) => `\x1b[38;5;${role === "accent" ? 205 : 242}m${text}\x1b[0m`,
+			strikethrough: (text) => `\x1b[9m${text}\x1b[0m`,
+		};
+		const sentRow = sentRowLines(sentNote(1, "漢字↶"), ansi, 46)[0] as string;
+		assert.equal(visibleWidth(sentRow), 46, "the sent row fills its columns exactly");
+		assert.equal(restoreGlyphColumn(sentRow), visibleWidth(sentRow) - 1, "the restore target is the last cell, not the note's own glyph");
+		const wide = addNote(emptyNotes(), "漢字➤", 1);
+		const plain = addNote(emptyNotes(), "ascii", 1);
+		assert.ok(typeof wide !== "string" && typeof plain !== "string", "the pending notes are accepted");
+		const wideRow = pendingRowLines((wide as { note: NoteTask }).note, ansi, 46)[0] as string;
+		const plainRow = pendingRowLines((plain as { note: NoteTask }).note, ansi, 46)[0] as string;
+		// A pending row carries three glyphs (lead, send, delete/back-to-sent), so
+		// the property is not "the send glyph is last" but "wide text moves
+		// nothing": the row still fills its columns and every target keeps the
+		// column the ASCII row gave it.
+		assert.equal(visibleWidth(wideRow), 46, "the pending row fills its columns exactly");
+		assert.equal(sendGlyphColumn(wideRow), sendGlyphColumn(plainRow), "wide text does not move the send target");
+		assert.equal(trailingGlyphColumn(wideRow), visibleWidth(wideRow) - 1, "the trailing affordance stays the last cell");
+	});
+
 	it("keeps the restore glyph at one column on folded and unfolded rows", () => {
 		const unfolded = sentRowLines(sentNote(1, "una nota bastante larga como para plegarse"), theme, 30)[0]!;
 		const folded = sentRowLines(sentNote(1, "una nota bastante larga como para plegarse"), theme, 30, true)[0]!;
 		assert.equal(restoreGlyphColumn(folded), restoreGlyphColumn(unfolded));
+	});
+
+	it("takes the last restore glyph, so text carrying one cannot steal it (P1.4)", () => {
+		const line = "   texto con ↶ adentro   ↶";
+		assert.equal(restoreGlyphColumn(line), visibleWidth(line.slice(0, line.lastIndexOf("↶"))), "the affordance is the last glyph, measured in columns");
+		const row = sentRowLines(sentNote(1, "esto ↶ vuelve a la lista"), theme, 46)[0] as string;
+		assert.notEqual(row.indexOf("↶"), row.lastIndexOf("↶"), "the note paints its own glyph before the affordance");
+		assert.equal(restoreGlyphColumn(row), row.lastIndexOf("↶"), "the click target stays on the affordance");
 	});
 
 	it("paints the restore glyph with the hover role while the pointer is on it", () => {
@@ -540,14 +574,18 @@ describe("buildCompactNotesRow", () => {
 		assert.ok(clamped.rows.some((line) => line.includes("↑↓ 3–10/10")), `scrollTop clamps to the last window: ${clamped.rows.join(" | ")}`);
 	});
 
-	it("outlined styles fall back to the collapsed panel without a hit span", () => {
+	it("hit-tests the expand control in the outlined style too (P1.5)", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "neon";
-		const collapsed = buildCompactNotesRow(mixedState(), theme, 60, { collapsed: true });
+		const collapsed = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: true });
 		assert.equal(collapsed.rows.length, 3);
 		assert.ok(collapsed.rows[0]?.includes("Notes"), `title paints in the frame: ${collapsed.rows[0]}`);
-		assert.equal(collapsed.control, undefined);
-		const expanded = buildCompactNotesRow(mixedState(), theme, 60, { collapsed: false });
+		// The outlined frame paints the same control inside its title, so it
+		// needs the same hit span the float panel gives it: without one the
+		// control renders and nothing can ever open the list under NEON.
+		assert.deepEqual(collapsed.control, { start: 10, end: 17 }, "the outlined control is clickable");
+		const expanded = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: false });
 		assert.ok(expanded.rows.length > 2, "the list paints inside the frame");
 		assert.deepEqual(expanded.hits, [{ row: 1, id: 1 }, { row: 2, id: 3 }]);
+		assert.deepEqual(expanded.control, { start: 10, end: 19 }, "the expanded outlined control stays clickable");
 	});
 });
