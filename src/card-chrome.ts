@@ -6,6 +6,15 @@
 // renders exactly what gentle-shell would, without importing gentle-pi.
 // Deviations from the original: panels only (no tool-row/preview paths), and
 // nonpositive widths return no rows (the rail never renders there).
+//
+// Provenance, so the replica has an exact commit to be checked against:
+//   upstream file: lib/shell-card.ts in Gentleman-Programming/gentle-shell
+//   commit:        b2d428b5e76f0c03089c0b9e07a64298582466ab (branch
+//                  `notes-rail-section`; `main` carries the same blob)
+//   blob:          8282e1912f7f8008a189ca57447391f3f77b67bd
+// This is a local fork, kept on purpose because the shell exposes no importable
+// module for its card chrome or its pointer hit-testing. Re-check it against
+// that upstream file whenever that file changes.
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export const CARD_TONE = {

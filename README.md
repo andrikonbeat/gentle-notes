@@ -21,7 +21,7 @@ are ready — one click from the rail, or one pick from the manager dialog.
 
 | Topic | Behavior |
 |-------|----------|
-| Storage | One JSON file per project under `~/.pi/gentle-ai/notes/`, honoring `GENTLE_PI_CONFIG_HOME`. Atomic writes, serialized per file across concurrent sessions. |
+| Storage | One JSON file per project under `~/.pi/gentle-ai/notes/`, honoring `GENTLE_PI_CONFIG_HOME`. Atomic writes, serialized per file inside one process (see *One writer per process* below). |
 | Fullscreen sidebar | Paints as the `notes` rail section (below Todo) when gentle-shell supports it. Click the field to write (`Enter` saves, `Esc` — or a click anywhere else — returns the keyboard to the chat), click a note's text to edit it inline, double click to fold it back to its first line, click `➤` to send (its target is two columns wide on each side), and drive the block from the header controls (`▾ Collapse` / `▾ Fold`). |
 | Regular mode | One summary line above the editor with a blank line of air on each side: `Notes ▸ Expand  N pend · M sent — <the last note's first words>`, the preview clipped to the window. Hidden while empty. |
 | While the agent runs | The note is queued as a follow-up prompt (`deliverAs: "followUp"`), never interrupting the current turn. |
@@ -61,9 +61,10 @@ To uninstall: remove the link or directory, and delete
 - The rail section needs a gentle-shell that lists `notes` among its sidebar
   sections. Until that lands upstream, everything else works: the compact row,
   the `/notes` command and the `alt+n` manager.
-- The ready patch lives in `upstream/gentle-shell` (branch
-  `notes-rail-section`, commit `b2d428b`): three files, adding `notes` to the
-  rail sections plus its visibility flag, with a new upstream test
+- The ready stopgap patch is versioned in the repository, under
+  `proposal/rail-patch/` (`notes-rail.patch`, plus a README with what it
+  changes and how to apply it): three files, adding `notes` to the rail
+  sections plus its visibility flag, with a new upstream test
   (`tests/shell-sidebar-layout.test.ts`, 47/47 green).
 
 ## How it works
@@ -111,9 +112,10 @@ The store is the user's own writing, so it is treated that way:
 
 ```bash
 npm run check           # typecheck + tests — what CI runs
-npm test                # or: node --test tests/   (Node >= 22, native TS)
+npm test                # node --test "tests/*.test.ts" (Node >= 22, native TS)
 npm run typecheck       # tsc --noEmit
 npm run verify:package  # pack, then assert the tarball carries what Pi loads
+npm run check:card-parity # dev only: our card vs gentle-shell's own (needs the clone)
 ```
 
 `.github/workflows/ci.yml` runs `npm run check` and `npm run verify:package` on
@@ -122,7 +124,7 @@ scratch project — the same three gates gentle-shell asks of its own pull
 requests. macOS is in the matrix on purpose: the store relies on atomic rename
 and on file modes, and both behave differently there.
 
-213 tests over 38 suites: pure modules, rendering, and an integration harness
+225 tests over 38 suites: pure modules, rendering, and an integration harness
 with mocked Pi surfaces that exercises the whole wiring (registration, session
 lifecycle, click-to-send, busy queueing, restore, visibility, shutdown), plus
 the storage rules above (permissions, corrupt store recovery, watcher
@@ -149,10 +151,14 @@ extension touches, including the ones behind runtime guards
 those declarations, delete the module and import theirs.
 
 - Feature spec and task log: `odd/tasks/gentle-notes.md`
-- Upstream patch: `upstream/gentle-shell` (shallow clone, gitignored; branch
-  `notes-rail-section`)
+- Upstream patch: `proposal/rail-patch/` (stopgap, versioned; the clone it came
+  from is gitignored)
 
 ## Next step
 
-Open the upstream PR for the `notes` rail section from the patch branch, then
-load the extension in your daily gentle-shell session.
+Open the feature request (`proposal/feature-request.md`) as an issue in
+`Gentleman-Programming/gentle-shell` and wait for `status:approved` — this
+repository does not open a PR without an approved issue. Only after that does
+the rail section become a pull request; until then, apply
+`proposal/rail-patch/notes-rail.patch` by hand and load the extension in your
+daily gentle-shell session.

@@ -1,0 +1,53 @@
+diff --git a/lib/shell-sidebar-layout.ts b/lib/shell-sidebar-layout.ts
+index 23d47bd..6ee9d19 100644
+--- a/lib/shell-sidebar-layout.ts
++++ b/lib/shell-sidebar-layout.ts
+@@ -235,7 +235,7 @@ export function installSidebar(tui: TUI, theme: ShellBarTheme, placement: () =>
+ 			const preparedHeaderLines = [...(headerPart?.render(Math.max(0, width - HEADER_RIGHT_INSET)) ?? [])];
+ 			const headerActive = headerPart !== undefined && preparedHeaderLines.some((line) => line.trim() !== "");
+ 			const contentWidth = scroll.getContentWidth(RAIL_WIDTH);
+-			const sections = ["footer", "agents", "todo"].filter((key) => key !== "todo" || state.visibility?.todo !== false).map((key) => {
++			const sections = ["footer", "agents", "todo", "notes"].filter((key) => (key !== "todo" || state.visibility?.todo !== false) && (key !== "notes" || state.visibility?.notes !== false)).map((key) => {
+ 				const component = state.parts.get(key);
+ 				if (!component) {
+ 					sectionCache.delete(key);
+diff --git a/lib/shell-sidebar.ts b/lib/shell-sidebar.ts
+index bf76a8e..a0bf197 100644
+--- a/lib/shell-sidebar.ts
++++ b/lib/shell-sidebar.ts
+@@ -7,7 +7,7 @@ const STATE = Symbol.for("gentle-pi.experimental-sidebar.state");
+ export const VISUAL_SETTINGS_CHANGED = "gentle-pi.visual-settings-changed";
+ export interface SidebarState {
+ 	active: boolean;
+-	visibility?: { todo?: boolean };
++	visibility?: { todo?: boolean; notes?: boolean };
+ 	ownsHost?: () => boolean;
+ 	/**
+ 	 * Columns the fullscreen rail reserves at the right edge (rail plus gap)
+diff --git a/tests/shell-sidebar-layout.test.ts b/tests/shell-sidebar-layout.test.ts
+index af405ab..fbbfbe1 100644
+--- a/tests/shell-sidebar-layout.test.ts
++++ b/tests/shell-sidebar-layout.test.ts
+@@ -293,6 +293,22 @@ test("TODO visibility hides both rail and bottom without mutating the registered
+ 	assert.deepEqual(todo.render(100), ["todo"]);
+ });
+ 
++test("notes rail section paints after TODO and hides through visibility", (t) => {
++	const f = fixture();
++	sidebarPart(f.tui, "todo", { render: (_width: number) => ["todo"], invalidate() {} });
++	sidebarPart(f.tui, "notes", { render: (_width: number) => ["Notas"], invalidate() {} });
++	t.after(installSidebar(f.tui, theme));
++	const lines = rail(f).render(50).map((line) => line.trim());
++	assert.match(lines.join("\n"), /Notas/);
++	assert.ok(lines.indexOf("todo") < lines.indexOf("Notas"), "notes paints after todo");
++	sidebarState(f.tui).visibility = { notes: false };
++	invalidateSidebar(f.tui);
++	assert.doesNotMatch(rail(f).render(50).join("\n"), /Notas/);
++	sidebarState(f.tui).visibility = { notes: true };
++	invalidateSidebar(f.tui);
++	assert.match(rail(f).render(50).join("\n"), /Notas/);
++});
++
+ test("rail orders unified Status, agents, TODO without standalone changes", (t) => {
+ 	const f = fixture();
+ 	for (const key of ["todo", "agents", "changes"]) {

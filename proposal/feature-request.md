@@ -77,8 +77,11 @@ capture-and-defer surface with the same visual grammar the rail already uses:
   notes while both are open. View state (collapsed, folded, sent-section
   collapsed) rides in the same file, so a restart looks like the session never
   ended.
-- **Every gesture has a keyboard path.** `/notes` (manager dialog), `/note <text>`
-  (capture straight from the chat), `alt+n` (manager). Nothing is mouse-only.
+- **A keyboard path for every gesture that has one.** `/notes` (manager
+  dialog), `/note <text>` (capture straight from the chat), `alt+n` (manager),
+  and the `/notes send|list|clear|delete|restore|collapse|expand|fold|unfold`
+  subcommands. Inline text editing is the one exception today: it is click-only,
+  and a keyboard caller changes a note by deleting it and adding it again.
 
 ## Alternatives considered
 
@@ -101,14 +104,27 @@ capture-and-defer surface with the same visual grammar the rail already uses:
 ### What already exists, and what it costs upstream
 
 The implementation is complete and tested in a separate repository
-(`gentle-notes`: 7 source modules, 213 tests, `npm run check` green). It reaches
+(`gentle-notes`: 8 source modules, 225 tests, `npm run check` green). It reaches
 the rail through the same `Symbol.for` interop the other sections use
 (`sidebarPart(tui, "notes", bottom, rail)`), so **it needs no fork of
 gentle-shell**: it is harmless when gentle-shell is absent.
 
 One additive patch is required for the card to appear in the rail's section
-list — `notes` in the section array of `lib/sidebar-shell-layout.ts`, plus the
+list — `notes` in the section array of `lib/shell-sidebar-layout.ts`, plus the
 `visibility.notes` condition and its type. Everything else is client-side.
+
+Known debt, declared rather than discovered later: the card chrome
+(`src/card-chrome.ts`) and the pointer hit-testing that reads glyph columns off
+the rendered rows are a **local replica** of the shell's card system, because
+gentle-shell exposes no importable module for either — its renderer and its
+`NativePointerRegion` live inside the package, and an extension can only reach
+the shared `Symbol.for` state. The replica is pinned byte for byte against the
+upstream output by golden fixtures, and its header names the upstream file,
+commit and blob it mirrors. Once the `notes` section lands upstream and the
+card is written beside `lib/shell-card.ts`, the replica becomes unnecessary:
+same module, direct imports, `NativePointerRegion` for the hit-testing. That is
+a consequence of moving the code, not work this request promises — as an
+extension it has neither the module nor the pointer region to import.
 
 Three members it drives are internal to the host, and are reached through
 runtime guards rather than assumed:
@@ -135,7 +151,7 @@ names the shape it needs in one local module and typechecks against it.
 ### How it was validated
 
 - Deterministic suite: `npm run check` → `tsc --noEmit` clean (73 errors found
-  and fixed when the compiler was first added) and **213 tests / 38 suites**
+  and fixed when the compiler was first added) and **225 tests / 38 suites**
   green. Byte-parity goldens pin the card against gentle-shell's own card
   rendering; a shrinking-width test pins the rail's "every line fits"
   contract, whose violation silently disables the whole rail layout.
@@ -152,7 +168,7 @@ names the shape it needs in one local module and typechecks against it.
 
 ### Open questions for the maintainer
 
-- **Shape.** This lives in 7 small modules; `gentle-todo.ts` is a single 18K
+- **Shape.** This lives in 8 small modules; `gentle-todo.ts` is a single 18K
   file. Fold it into one file, or accept a directory?
 - **Ownership.** Should the card and the store live in gentle-shell (next to the
   Todos), or stay an independent extension that only asks for the rail section?
