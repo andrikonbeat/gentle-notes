@@ -1,0 +1,61 @@
+# The same three things gentle-shell requires of its own pull requests, in this
+# repository's own toolchain: the test suite and the typecheck, and the package
+# content check. No deployment, no publishing — this workflow only reads.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check · ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # `engines.node` is >=22.19.0; 24 is the current LTS. macOS is in the
+        # matrix because the store relies on atomic rename and on file modes,
+        # and both behave differently there.
+        os: [ubuntu-latest, macos-latest]
+        node: ["22.x", "24.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run verify:package
+
+  install:
+    name: install the packed tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: npm
+      - run: npm ci
+      # Installing what would actually be published catches a `files`/
+      # `.npmignore` mistake that the checkout can never show.
+      - name: Pack and install into a scratch project
+        run: |
+          tarball=$(npm pack --silent)
+          mkdir -p "$RUNNER_TEMP/packed" && cd "$RUNNER_TEMP/packed"
+          npm init -y > /dev/null
+          npm install --silent "$GITHUB_WORKSPACE/$tarball"
+          test -f node_modules/gentle-notes/index.ts
+          test -f node_modules/gentle-notes/src/extension.ts
+          test ! -d node_modules/gentle-notes/tests
+          echo "installed package carries the entry point and no development files"
