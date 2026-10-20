@@ -3,3 +3,4 @@ upstream/
 .atl/
 *.log
 .DS_Store
+.directory
