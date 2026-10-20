@@ -1,5 +1,7 @@
 # Gentle Notes — a persistent notepad sidebar for Pi and gentle-shell
 
+[![CI](https://github.com/andrikonbeat/gentle-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/andrikonbeat/gentle-notes/actions/workflows/ci.yml)
+
 Capture the tasks you want the AI to do later before you forget them, keep them
 glanceable in the sidebar, and send any note to the chat as a prompt when you
 are ready — one click from the rail, or one pick from the manager dialog.
