@@ -67,10 +67,3 @@ that cannot be read is preserved instead of replaced, directory mode `0700` and
 file mode `0600`), the sidebar grammar that matches the existing `Todos` card,
 and the test strategy — one test per requested rule plus one per existing
 behaviour the change touches.
-
----
-
-**Before submitting**: this is a draft. Confirm the model and provider are the
-ones actually used, adjust the verification list to what you personally ran, and
-keep the statement truthful — the policy makes the contributor, not the tool,
-responsible for every claim in it.
