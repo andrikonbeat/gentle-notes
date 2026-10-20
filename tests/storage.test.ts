@@ -307,21 +307,30 @@ describe("mutateNotes", () => {
 		const env = { GENTLE_PI_CONFIG_HOME: base };
 		const project = newProject(base);
 		const seen: string[] = [];
+		let attempted = 0;
 		const stopThrowing = watchNotes(project, () => {
+			attempted += 1;
 			throw new Error("subscriber blew up");
 		}, env);
 		const stopOk = watchNotes(project, (state) => {
 			seen.push(`ok:${state.notes.length}`);
 		}, env);
 		try {
-			await mutateNotes(project, (current) => addNote(current, "a", 1), env);
-			// A watcher event is environmental, not deterministic: fsevents on macOS
-			// coalesces and a shared runner can push delivery past a fixed budget —
-			// 400ms of ticks made CI red once at 482ms. Wait on a deadline with a
-			// wide margin instead, and leave as soon as the subscriber hears it.
-			const deadline = Date.now() + 5_000;
-			while (seen.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-			assert.deepEqual(seen, ["ok:1"], "the healthy subscriber still hears about the change");
+			// fs.watch becomes active asynchronously, and a write that lands before
+			// it is ready is lost for good — not delayed — which is what CI hit on a
+			// cold macOS runner after waiting a full five seconds. The property here
+			// is isolation, not event latency: retry the write until the pair has
+			// heard some change, then assert that the throwing sibling neither
+			// silenced the healthy one nor stopped the dispatch.
+			for (let round = 1; round <= 60 && seen.length === 0; round += 1) {
+				await mutateNotes(project, (current) => addNote(current, `a${round}`, round), env);
+				for (let tick = 0; tick < 15 && seen.length === 0; tick += 1) {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+			}
+			assert.ok(attempted > 0, "the throwing subscriber was actually called");
+			assert.ok(seen.length > 0, "the healthy subscriber still hears about the change");
+			assert.match(seen[0] as string, /^ok:[1-9]\d*$/, "it received a real state, not an empty one");
 		} finally {
 			stopThrowing();
 			stopOk();
