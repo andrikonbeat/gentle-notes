@@ -11,7 +11,7 @@ import { NOTE_STATUS, addNote, clearByStatus, clearNotes, deleteNote, emptyNotes
 import { loadNotes, mutateNotes, reloadNotes, watchNotes } from "./storage.ts";
 import { buildCompactNotesRow, buildNotesCard, collapsedNoteRow, COMPACT_ROW_CAP, controlSpan, deleteGlyphColumn, NOTES_ROW_CAP, railControlText, restoreGlyphColumn, sendGlyphColumn, trailingGlyphColumn, type NotesCardHit, type NotesCardTheme } from "./notes-card.ts";
 import { CARD_GLYPH, CARD_TONE, paintPanelRows, panelBodyLine, panelBodyWidth, panelContentColumn, panelFloatApplies, panelHeaderRow, panelInnerWidth, renderCardPanel, type CardChromeTheme } from "./card-chrome.ts";
-import { invalidateSidebar, sidebarPart } from "./sidebar-interop.ts";
+import { invalidateSidebar, sidebarPart, sidebarState } from "./sidebar-interop.ts";
 import { DEFAULT_SETTINGS, SEND_DESTINATION, readSettings, writeSettings, type NotesSettings, type SendDestination } from "./settings.ts";
 
 
@@ -122,19 +122,19 @@ function installClickAway(tui: TUI): void {
 const RAIL_BODY_CAP = 24;
 
 const HELP = [
-	"Usage: /notes [add <text> | send [<id>] | list | show | restore [<id>] | clear | delete [<id>] | collapse | expand | fold | unfold]",
+	"Usage: /notes [add <text> | send [<id>] | list | show | restore [<id>] | clear | clear sent | delete <id> | edit <id> | collapse | expand | collapse sent | expand sent | fold [<id>] | unfold [<id>] | settings [chat|editor] | help]",
 	"Shorthand: /note <text> adds a note straight from the chat.",
-	"alt+n opens the notes manager; click ➤ on a rail row to send it to the chat (or into the chat input, see settings).",
-	"The N sent control folds the whole section; Delete All beside it clears every sent note at once, and each sent row carries its own ↶ (back to pending) and × (delete that one).",
-	"The trailing × deletes a note that was never sent; once a note has travelled, the trailing glyph becomes ✓ and puts it back in the pending list without sending it again.",
-	"Click a note's text to edit it; double click folds it back to its first line.",
+	"alt+n opens the notes manager (settings only: send target, clear pending, clear all).",
+	"Click ➤ on a rail row to send it; alt+pgup/pgdn scrolls the list; × deletes a pending note; ✓ marks a sent note; ↶ restores it; × deletes a sent note.",
+	"The N sent control folds the section; Delete All beside it clears every sent note at once.",
+	"Click a note's text to edit it inline; double click folds it back to its first line.",
 	"Esc, or a click anywhere else, hands the keyboard back to the chat.",
 	"Settings: /notes settings [chat|editor] decides whether ➤ sends now or loads the note into the chat input.",
 	"Notes are capped at 2000 characters; anything the terminal could execute or reorder is stripped from the text before it is stored.",
 ].join("\n");
 
 export interface NotesArgs {
-	action: "manage" | "add" | "send" | "list" | "show" | "restore" | "clear" | "help" | "collapse" | "expand" | "fold" | "unfold" | "delete" | "settings";
+	action: "manage" | "add" | "send" | "list" | "show" | "restore" | "clear" | "clearSent" | "help" | "collapse" | "expand" | "collapseSent" | "expandSent" | "fold" | "unfold" | "delete" | "edit" | "settings";
 	rest: string;
 	id?: number;
 }
@@ -158,6 +158,8 @@ export function parseNotesArgs(args: string): NotesArgs {
 		case "show":
 			return { action: "show", rest: payload };
 		case "clear":
+			// "clear sent" -> action "clearSent", rest empty
+			if (rest[0] === "sent") return { action: "clearSent", rest: "" };
 			return { action: "clear", rest: payload };
 		case "delete": {
 			const first = rest[0];
@@ -169,14 +171,24 @@ export function parseNotesArgs(args: string): NotesArgs {
 			const id = first !== undefined && /^\d+$/.test(first) ? Number.parseInt(first, 10) : undefined;
 			return { action: "restore", rest: payload, id };
 		}
-		case "collapse":
+		case "collapse": {
+			if (rest[0] === "sent") return { action: "collapseSent", rest: "" };
 			return { action: "collapse", rest: payload };
-		case "expand":
+		}
+		case "expand": {
+			if (rest[0] === "sent") return { action: "expandSent", rest: "" };
 			return { action: "expand", rest: payload };
-		case "fold":
-			return { action: "fold", rest: payload };
-		case "unfold":
-			return { action: "unfold", rest: payload };
+		}
+		case "fold": {
+			const first = rest[0];
+			const id = first !== undefined && /^\d+$/.test(first) ? Number.parseInt(first, 10) : undefined;
+			return { action: "fold", rest: payload, id };
+		}
+		case "unfold": {
+			const first = rest[0];
+			const id = first !== undefined && /^\d+$/.test(first) ? Number.parseInt(first, 10) : undefined;
+			return { action: "unfold", rest: payload, id };
+		}
 		case "settings":
 			return { action: "settings", rest: payload };
 		case "help":
@@ -196,6 +208,8 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 	let widgetTui: TUI | undefined;
 	/** Cleanup for the file watcher that keeps sibling sessions in sync. */
 	let unwatchNotes: (() => void) | undefined;
+	/** Pending edit request from command handler; rail card picks it up on render. */
+	let requestEditId: number | undefined;
 
 	pi.on("agent_start", () => {
 		busy = true;
@@ -230,7 +244,29 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		sentCollapseHovered: false,
 		/** Hovering the sent section's group delete (L45). */
 		sentDeleteHovered: false,
+		/** The rail card's ScrollView, set by makeRailCard after construction. */
+		scroll: undefined as { scrollBy: (lines: number) => void; scrollTop: number } | undefined,
+		/** The compact row's scrollTop state, set by makeCompactRow. */
+		compactScrollTop: 0,
+		/** The last known bodyTotal from the compact row render. */
+		compactBodyTotal: 0,
 	};
+
+/** Scroll the notes list by ±3 rows (or given amount). Selects the rail
+ * when the sidebar owns the host, otherwise the compact expanded list. */
+const scrollNotes = (lines: number): void => {
+	const state = widgetTui?.terminal ? sidebarState(widgetTui) : undefined;
+	const ownsHost = state?.active && state.ownsHost?.();
+	if (ownsHost && railView.scroll) {
+		railView.scroll.scrollBy(lines);
+		widgetTui?.requestRender();
+	} else if (!ownsHost) {
+		// Use the bodyTotal from the last compact render (stored in railView).
+		const maxScroll = Math.max(0, (railView.compactBodyTotal ?? 0) - COMPACT_ROW_CAP);
+		railView.compactScrollTop = Math.max(0, Math.min(railView.compactScrollTop + lines, maxScroll));
+		widgetTui?.requestRender();
+	}
+};
 
 	// The note whose delete glyph the pointer is on (D15): hover repaints
 	// the accent role, the digest carries it, a click removes the note.
@@ -304,6 +340,28 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		} catch {
 			// Nothing to do: the write already landed.
 		}
+	};
+
+	/** Fold a single note to its first line. */
+	const foldOne = async (id: number): Promise<void> => {
+		const note = current.notes.find((n) => n.id === id);
+		if (!note) return;
+		railView.foldOverrides.set(id, true);
+		refresh();
+	};
+
+	/** Unfold a single note to full text. */
+	const unfoldOne = async (id: number): Promise<void> => {
+		railView.foldOverrides.delete(id);
+		refresh();
+	};
+
+	/** Start inline edit on a pending note (called from /notes edit <id>). */
+	const startEdit = async (id: number): Promise<void> => {
+		const note = current.notes.find((n) => n.id === id && n.status === NOTE_STATUS.PENDING);
+		if (!note) return;
+		requestEditId = id;
+		refresh();
 	};
 
 	/** Read-modify-write through the storage queue, refreshing the UI after.
@@ -473,7 +531,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		let editingId: number | undefined;
 		const input = new Editor(widgetTui as TUI, editorTheme);
 		const editInput = new Editor(widgetTui as TUI, editorTheme);
-		input.onSubmit = (text) => {
+		input.onSubmit = (text): void => {
 			if (text.trim().length === 0) return;
 			// pi-tui's Editor empties itself inside submitValue, before it calls
 			// onSubmit, so the draft is already gone by the time the store
@@ -488,13 +546,14 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				refresh();
 			});
 		};
-		editInput.onSubmit = (text) => {
+		editInput.onSubmit = (text): void => {
 			void commitEdit(text);
 		};
 		// Widgets are measured as leaves, so the note body needs its own
 		// viewport, exactly like the Todos panel: the header, the editor and
 		// the closing rule stay outside the scroll.
 		const scroll = new ScrollView({ render: () => bodyCache, invalidate() {} }, { follow: "none", overscroll: "contain" });
+		railView.scroll = { scrollBy: (lines: number) => scroll.scrollBy(lines), get scrollTop() { return scroll.scrollTop; } };
 		let bodyCache: string[] = [];
 		let inputTick = 0;
 		// First visible row of the field's own window (see the render path).
@@ -616,6 +675,19 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// shows no field at all.
 				input.focused = self.focused === true && editingId === undefined && !railView.collapsed;
 				editInput.focused = self.focused === true && editingId !== undefined && !railView.collapsed;
+				// Handle pending edit request from /notes edit <id>
+				if (requestEditId !== undefined) {
+					const note = current.notes.find((n) => n.id === requestEditId && n.status === NOTE_STATUS.PENDING);
+					if (note) {
+						editingId = requestEditId;
+						editInput.setText(note.text);
+						// Take focus if the card is focused
+						if (widgetTui && self.focused) {
+							widgetTui.setFocus(self);
+						}
+					}
+					requestEditId = undefined;
+				}
 				const view = buildNotesCard(current, cardTheme, inner, hoveredId, editingId, { foldedIds: foldedIdSet(), hoveredDeleteId: deleteHoveredId, hoveredRestoreId: restoreHoveredId, sentCollapsed: railView.sentCollapsed, sentCollapseHovered: railView.sentCollapseHovered, sentDeleteHovered: railView.sentDeleteHovered });
 				// Total and pending only (L45): the sent count is the sent section's
 				// own header one row below, so repeating it up here would spend the
@@ -665,6 +737,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// scroll; the smallest terminals keep the bounded behavior.
 				const terminalRows = (widgetTui?.terminal as unknown as { rows?: number } | undefined)?.rows ?? 48;
 				const height = Math.min(RAIL_BODY_CAP, Math.floor(terminalRows / 2));
+				
 				// The editor windows itself at 30% of the terminal — more rows
 				// than this card can hold — so the field takes its own window
 				// inside the budget and follows the cursor marker. Letting the
@@ -684,17 +757,26 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					fieldContent[0] = panelBodyLine(cardTheme.fg("muted", "＋ Write a note…"), tone, cardTheme, width);
 				}
 				const fieldRows = paintPanelRows(fieldContent, cardTheme, width, tone);
-				const overflow = headRows + fieldRows.length + bodyCache.length + 1 > height;
+				// Compute overflow based on the actual body rows that will be rendered
+				// (view.bodyRows + field placeholder), not the stale bodyCache.
+				const totalBodyRows = 1 + view.bodyRows.length; // field placeholder + notes
+				// Use >= so content that exactly fills the available space still shows the hint
+				// (the ScrollView will have overscroll when bodyCache.length > viewportHeight).
+				const overflow = headRows + fieldRows.length + totalBodyRows + 1 >= height;
 				const room = Math.max(1, height - headRows - fieldRows.length - 1 - Number(overflow));
 				scroll.updateLayout(bodyCache.length, room, () => widgetTui?.requestRender());
 				const visible = scroll.render(width).slice(scroll.scrollTop, scroll.scrollTop + scroll.viewportHeight);
 				const notesStart = headRows + fieldRows.length;
 				// Include scroll indicator as part of the panel body (before bottom rule)
 				const visibleWithIndicator = [...visible];
+				const output = [...lines.slice(0, headRows), ...fieldRows, ...visibleWithIndicator];
 				if (overflow) {
-					visibleWithIndicator.push(...paintPanelRows([cardTheme.fg("muted", truncateToWidth(`↑↓ ${scroll.scrollTop + 1}–${scroll.scrollTop + visible.length}/${bodyCache.length}`, bodyWidth))], cardTheme, width, tone));
+					const hintText = `↑↓ ${scroll.scrollTop + 1}–${scroll.scrollTop + visible.length}/${bodyCache.length} · alt+pgup/pgdn`;
+					const hintLine = theme.fg("muted", truncateToWidth(hintText, panelBodyWidth(theme, width)));
+					const hintRows = paintPanelRows([hintLine], theme, width);
+					output.push(...hintRows);
 				}
-				const output = [...lines.slice(0, headRows), ...fieldRows, ...visibleWithIndicator, ...lines.slice(lines.length - 1)];
+				output.push(...lines.slice(lines.length - 1)); // bottom rule last
 				// The header row carries the two view controls: the click map
 				// reads their columns off the rendered line, so the targets stay
 				// right in every card style.
@@ -1071,6 +1153,8 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 				// Keep the state where the render clamped it, so a shrunk backlog
 				// cannot leave the window past its end.
 				scrollTop = Math.max(0, Math.min(scrollTop, Math.max(0, last.bodyTotal - COMPACT_ROW_CAP)));
+				railView.compactScrollTop = scrollTop;
+			railView.compactBodyTotal = last.bodyTotal;
 				return last.rows;
 			},
 			handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
@@ -1245,12 +1329,8 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 			return;
 		}
 		const summary = notesSummary(current);
-		const pending = current.notes.filter((note) => note.status === NOTE_STATUS.PENDING).slice(0, MANAGER_LIMIT);
+		// Settings-only manager: no add button, no per-note entries (S14).
 		const options = [
-			MANAGER_ADD,
-			...pending.map((note) => managerLine("➤", `#${note.id} ${note.text}`)),
-			// The scoped clears only appear while that group has notes: an entry
-			// that would remove nothing is noise in a menu the user reads fast.
 			managerSettingsEntry(settings.sendDestination),
 			...(summary.pending > 0 ? [MANAGER_CLEAR_PENDING] : []),
 			MANAGER_CLEAR,
@@ -1258,11 +1338,6 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 		];
 		const choice = await ctx.ui.select(`Notes · ${summary.pending} pending · ${summary.sent} sent`, options);
 		if (choice === undefined || choice === MANAGER_CLOSE) return;
-		if (choice === MANAGER_ADD) {
-			const text = await ctx.ui.input("New note", "Write the task you want the AI to do later…");
-			if (text && text.trim()) await saveNote(text);
-			return;
-		}
 		if (choice === managerSettingsEntry(settings.sendDestination)) {
 			await openSettings(ctx, "");
 			return;
@@ -1271,14 +1346,42 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 			if (await ctx.ui.confirm("Clear all notes", "Remove every note, pending and sent?")) await clearAll();
 			return;
 		}
-			if (choice === MANAGER_CLEAR_PENDING) {
+		if (choice === MANAGER_CLEAR_PENDING) {
 			if (await ctx.ui.confirm("Clear all pending notes", `Remove ${summary.pending} pending note${summary.pending === 1 ? "" : "s"}? Sent notes stay.`)) {
 				await clearStatus(NOTE_STATUS.PENDING, summary.pending);
 			}
 			return;
 		}
+	};
+
+	/** Picker for /notes send without id: selects from pending notes. */
+	const pickPendingToSend = async (ctx: ExtensionContext): Promise<void> => {
+		if (!ctx.hasUI) return;
+		const pending = current.notes.filter((note) => note.status === NOTE_STATUS.PENDING);
+		if (pending.length === 0) {
+			notify("No pending notes to send");
+			return;
+		}
+		const options = pending.map((note) => managerLine("➤", `#${note.id} ${note.text}`));
+		const choice = await ctx.ui.select("Send which note?", options);
+		if (choice === undefined) return;
 		const match = /^➤\s+#(\d+)/.exec(choice);
 		if (match) await sendNote(Number.parseInt(match[1] as string, 10));
+	};
+
+	/** Picker for /notes restore without id: selects from sent notes. */
+	const pickSentToRestore = async (ctx: ExtensionContext): Promise<void> => {
+		if (!ctx.hasUI) return;
+		const sent = current.notes.filter((note) => note.status === NOTE_STATUS.SENT);
+		if (sent.length === 0) {
+			notify("No sent notes to restore");
+			return;
+		}
+		const options = sent.map((note) => managerLine("↶", `#${note.id} ${note.text}`));
+		const choice = await ctx.ui.select("Restore which note?", options);
+		if (choice === undefined) return;
+		const match = /^↶\s+#(\d+)/.exec(choice);
+		if (match) await restoreOne(Number.parseInt(match[1] as string, 10));
 	};
 
 	pi.registerCommand(COMMAND_NAME, {
@@ -1302,7 +1405,7 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					return;
 				case "send":
 					if (parsed.id !== undefined) await sendNote(parsed.id);
-					else await openManager(ctx);
+					else await pickPendingToSend(ctx);
 					return;
 				case "list":
 					listNotes();
@@ -1315,11 +1418,11 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					return;
 				case "delete":
 					if (parsed.id !== undefined) await deleteOne(parsed.id);
-					else await openManager(ctx);
+					else await pickPendingToSend(ctx); // or a delete picker? S15 says /notes delete <id>
 					return;
 				case "restore":
 					if (parsed.id !== undefined) await restoreOne(parsed.id);
-					else await openManager(ctx);
+					else await pickSentToRestore(ctx);
 					return;
 				case "collapse":
 					setRailCollapsed(true);
@@ -1332,6 +1435,27 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 					return;
 				case "unfold":
 					setRailFolded(false);
+					return;
+				case "collapseSent":
+					setRailSentCollapsed(true);
+					return;
+				case "expandSent":
+					setRailSentCollapsed(false);
+					return;
+				case "clearSent":
+					await clearStatus(NOTE_STATUS.SENT, current.notes.filter((n) => n.status === NOTE_STATUS.SENT).length);
+					return;
+				case "fold":
+					if (parsed.id !== undefined) await foldOne(parsed.id);
+					else await pickSentToRestore(ctx); // reuse picker pattern for foldable notes
+					return;
+				case "unfold":
+					if (parsed.id !== undefined) await unfoldOne(parsed.id);
+					else await pickSentToRestore(ctx);
+					return;
+				case "edit":
+					if (parsed.id !== undefined) await startEdit(parsed.id);
+					else await pickPendingToSend(ctx);
 					return;
 				case "settings":
 					await openSettings(ctx, parsed.rest);
@@ -1369,4 +1493,14 @@ export default function gentleNotes(pi: ExtensionAPI): void {
 			await openManager(ctx);
 		},
 	});
+
+	// Scroll the notes list by ±3 rows (S13): alt+pgup/pgdn. These are the
+	// keys the hint names — ctrl+shift+up/down is reserved by Pi for prompt
+	// navigation, and alt+shift+up/down is taken by the Todos extension.
+	for (const [key, lines] of [["alt+pageup", -3], ["alt+pagedown", 3]] as const) {
+		pi.registerShortcut(key, {
+			description: `Scroll the notes list ${lines < 0 ? "up" : "down"}`,
+			handler: async (_ctx) => scrollNotes(lines),
+		});
+	}
 }

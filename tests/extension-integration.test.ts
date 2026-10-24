@@ -551,6 +551,53 @@ describe("gentle-notes extension wiring", () => {
 		);
 	});
 
+	it("compact expanded list shows the scroll hint with keyboard suffix (S13)", async () => {
+		await harness.sessionStart(project);
+		for (let id = 1; id <= 12; id++) await harness.runCommand(`add nota compacta numero ${id}`, project);
+		const widget = harness.buildWidget();
+		widget.render(80);
+		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		const expanded = widget.render(80);
+		// The hint carries the keyboard suffix "· alt+pgup/pgdn"
+		assert.ok(expanded.some((line) => line.includes("↑↓ 1–8/12 · alt+pgup/pgdn")), `compact hint has keyboard suffix: ${expanded.join(" | ")}`);
+	});
+
+	it("rail card shows the scroll hint with keyboard suffix when overflowing (S13)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		// Add enough notes to overflow the rail body (RAIL_BODY_CAP = 24)
+		for (let id = 1; id <= 30; id++) await harness.runCommand(`add nota rail numero ${id}`, project);
+		const rail = harness.rail();
+		const lines = rail.render(46);
+		// The rail hint also carries "· alt+pgup/pgdn"
+		assert.ok(lines.some((line) => line.includes("↑↓ 1–") && line.includes("· alt+pgup/pgdn")), `rail hint has keyboard suffix: ${lines.join(" | ")}`);
+	});
+
+	it("rail scroll hint is hidden when the list fits (S13)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		for (let id = 1; id <= 5; id++) await harness.runCommand(`add nota corta ${id}`, project);
+		const rail = harness.rail();
+		const lines = rail.render(46);
+		// No overflow = no hint row
+		assert.ok(!lines.some((line) => line.includes("↑↓")), `no hint when it fits: ${lines.join(" | ")}`);
+	});
+
+
+
+
+
+	it("compact hint is hidden when collapsed (S13)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		for (let id = 1; id <= 12; id++) await harness.runCommand(`add nota compacta ${id}`, project);
+		const widget = harness.buildWidget();
+		widget.render(80);
+		// Collapsed: no expanded list, no hint
+		const collapsed = widget.render(80);
+		assert.ok(!collapsed.some((line) => line.includes("↑↓")), `no hint when collapsed: ${collapsed.join(" | ")}`);
+	});
+
 	it("paints the rail card by default, with the input row, even with no notes", async () => {
 		await harness.sessionStart(project);
 		harness.buildWidget();
@@ -1383,24 +1430,23 @@ describe("gentle-notes extension wiring", () => {
 		assert.ok(!lines.some((line) => line.includes("↑↓")), `no overflow hint while the notes fit: ${JSON.stringify(lines[lines.length - 1])}`);
 	});
 
-	it("sends a pending note through the keyboard manager", async () => {
+	it("sends a pending note through the picker (S14)", async () => {
 		await harness.sessionStart(project);
-		await harness.runCommand("add por teclado", project);
-		harness.setSelect("➤  #1 por teclado");
-		await harness.runShortcut(project);
+		await harness.runCommand("add por picker", project);
+		// /notes send without id opens the picker (alt+n no longer lists notes)
+		// Test the picker directly via the command handler
+		harness.setSelect("➤  #1 por picker");
+		await harness.runCommand("send", project);
 		await FLUSH();
-		assert.deepEqual(harness.sent, [{ content: "por teclado", options: undefined }]);
+		assert.deepEqual(harness.sent, [{ content: "por picker", options: undefined }]);
 		assert.equal(loadNotes(project).notes[0]?.status, NOTE_STATUS.SENT);
 	});
 
-	it("adds a note through the manager dialog input", async () => {
+	it("adds a note via /note command (S14: manager no longer captures)", async () => {
 		await harness.sessionStart(project);
-		harness.setSelect(MANAGER_ADD);
-		harness.setInput("desde el manager");
-		await harness.runCommand("", project);
-		assert.ok(harness.selectCalls[0]?.title.includes("0 pending"));
+		await harness.runCommand("add desde el comando", project);
 		const state = loadNotes(project);
-		assert.equal(state.notes[0]?.text, "desde el manager");
+		assert.equal(state.notes[0]?.text, "desde el comando");
 		assert.equal(state.notes[0]?.status, NOTE_STATUS.PENDING);
 	});
 
@@ -1731,9 +1777,12 @@ describe("gentle-notes extension wiring", () => {
 		const options = harness.selectCalls[harness.selectCalls.length - 1]?.options ?? [];
 		assert.ok(options.length > 1, `the manager opened: ${JSON.stringify(options)}`);
 		const entries = options.filter((option) => option !== "Close");
+		// S14: manager is settings-only — no add entry, no per-note entries
 		assert.ok(!entries.some((option) => option.includes("⚙")), `the emoji-capable gear is gone: ${JSON.stringify(entries)}`);
+		assert.ok(!entries.some((option) => option.startsWith("＋")), `no add entry in settings-only manager: ${JSON.stringify(entries)}`);
+		assert.ok(!entries.some((option) => option.startsWith("➤")), `no per-note entries in settings-only manager: ${JSON.stringify(entries)}`);
 		assert.ok(entries.some((option) => option.startsWith("✎")), `the send target keeps a glyph: ${JSON.stringify(entries)}`);
-		assert.ok(entries.some((option) => option.startsWith("＋")), `the add entry keeps its glyph: ${JSON.stringify(entries)}`);
+		assert.ok(entries.some((option) => option.startsWith("×")), `the clear entries keep their glyph: ${JSON.stringify(entries)}`);
 		const columns = new Set(entries.map((option) => managerGlyphColumns(option)));
 		assert.deepEqual([...columns], [3], `every label starts in the same column: ${JSON.stringify(entries)}`);
 	});

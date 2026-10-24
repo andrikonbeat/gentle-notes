@@ -517,7 +517,7 @@ export function buildCompactNotesRow(
 	const visible = view.bodyRows.slice(scrollTop, scrollTop + COMPACT_ROW_CAP);
 	const rows = renderCardPanel({ ...card, body: visible }, theme, width, { expanded: true });
 	if (total > visible.length) {
-		rows.push(...paintPanelRows([theme.fg("muted", truncateToWidth(`↑↓ ${scrollTop + 1}–${scrollTop + visible.length}/${total}`, panelBodyWidth(theme, width)))], theme, width));
+		rows.push(...paintPanelRows([theme.fg("muted", truncateToWidth(`↑↓ ${scrollTop + 1}–${scrollTop + visible.length}/${total} · alt+pgup/pgdn`, panelBodyWidth(theme, width)))], theme, width));
 	}
 	const headerRow = panelHeaderRow(theme, width);
 	// The float panel pads around its header; the outline frame does not.
