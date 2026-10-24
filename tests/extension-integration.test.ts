@@ -23,9 +23,8 @@ import { controlSpan, deleteGlyphColumn, restoreGlyphColumn, revertGlyphColumn }
 import { sendGlyphColumn } from "../src/notes-card.ts";
 
 const MANAGER_ADD = "＋ Add a note…";
-const MANAGER_CLEAR = "✕ Clear all notes";
-const MANAGER_CLEAR_SENT = "✕ Clear all sent notes";
-const MANAGER_CLEAR_PENDING = "✕ Clear all pending notes";
+const MANAGER_CLEAR = "×  Clear all notes";
+const MANAGER_CLEAR_PENDING = "×  Clear all pending notes";
 const ACCENT = "\x1b[38;5;205m";
 const WARNING = "\x1b[38;5;214m";
 const MUTED = "\x1b[38;5;242m";
@@ -291,6 +290,13 @@ function glyphRow(lines: string[]): { row: number; column: number } {
 	return { row, column: column as number };
 }
 
+/** Visible columns a manager entry spends on its glyph and its air: with a
+ * fixed label column every entry starts its text at the same place. */
+function managerGlyphColumns(option: string): number {
+	const prefix = /^[^\p{L}#]+/u.exec(option)?.[0] ?? "";
+	return visibleWidth(prefix);
+}
+
 describe("gentle-notes extension wiring", () => {
 	let configHome: string;
 	let project: string;
@@ -552,7 +558,7 @@ describe("gentle-notes extension wiring", () => {
 		// Float chrome: padding, header, padding, the field row, closing padding.
 		assert.equal(lines.length, 5);
 		assert.ok(lines[1]?.includes("✿ Notes"), `header carries the card glyph and title: ${lines[1]}`);
-		assert.ok(lines[1]?.includes("0 pend · 0 sent"), "header carries the empty summary");
+		assert.ok(lines[1]?.includes("0 total, 0 pend"), "header carries the empty summary");
 		assert.ok(lines[3]?.includes("＋ Write a note…"), `the field paints its placeholder: ${lines[3]}`);
 		assert.ok(lines[3]?.includes("\x1b[48;5;22m"), "the field row carries the panel background");
 		assert.ok(lines[3]?.includes("▎"), "the field row carries the float rail");
@@ -814,7 +820,7 @@ describe("gentle-notes extension wiring", () => {
 		await harness.sessionStart(project);
 		harness.buildWidget();
 		const rail = harness.rail();
-		const sentRow = rail.render(46).findIndex((line) => line.includes("✓") && line.includes("sent"));
+		const sentRow = rail.render(46).findIndex((line) => line.includes("sent") && line.includes("Collapse"));
 		assert.ok(sentRow >= 0, `the sent summary is painted: ${JSON.stringify(rail.render(46))}`);
 		const span = controlSpan(rail.render(46)[sentRow] ?? "", "Collapse");
 		assert.ok(span, "the sent summary carries a collapse control");
@@ -822,7 +828,7 @@ describe("gentle-notes extension wiring", () => {
 		rail.handleMouse?.(mouse("click", span.start, sentRow, 46));
 		await FLUSH();
 		const after = rail.render(46);
-		assert.ok(after.some((line) => line.includes("✓") && line.includes("Expand")), "the control flips to Expand");
+		assert.ok(after.some((line) => line.includes("sent") && line.includes("Expand")), "the control flips to Expand");
 		assert.ok(!after.some((line) => line.includes("una enviada")), "the sent rows fold away");
 		assert.equal(loadNotes(project).ui?.sentCollapsed, true, "the collapse reaches the stored state");
 
@@ -832,7 +838,7 @@ describe("gentle-notes extension wiring", () => {
 		await second.sessionStart(project);
 		second.buildWidget();
 		const secondRail = second.rail();
-		const restoredRow = secondRail.render(46).findIndex((line) => line.includes("✓") && line.includes("Expand"));
+		const restoredRow = secondRail.render(46).findIndex((line) => line.includes("sent") && line.includes("Expand"));
 		assert.ok(restoredRow >= 0, "the section comes back collapsed");
 		const expand = controlSpan(secondRail.render(46)[restoredRow] ?? "", "Expand");
 		assert.ok(expand);
@@ -852,8 +858,10 @@ describe("gentle-notes extension wiring", () => {
 		await FLUSH();
 		harness.buildWidget();
 		const rail = harness.rail();
-		/** The `✓ N sent` header row, the only line carrying both marks. */
-		const headerRow = (lines: string[]): number => lines.findIndex((line) => line.includes("✓") && line.includes("sent"));
+		/** The `N sent` header row: the only line naming the section and
+		 * carrying its own control (L45 dropped the ✓ lead). */
+		const headerRow = (lines: string[]): number =>
+			lines.findIndex((line) => line.includes("sent") && (line.includes("Collapse") || line.includes("Expand")));
 
 		const first = headerRow(rail.render(46));
 		assert.ok(first >= 0, `a short list still paints the header: ${JSON.stringify(rail.render(46))}`);
@@ -1103,11 +1111,11 @@ describe("gentle-notes extension wiring", () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add algo", project);
 		// Choosing the entry opens the destination picker underneath it.
-		harness.setSelect("⚙ Send target: chat");
+		harness.setSelect("✎  Send target: chat");
 		await harness.runCommand("", project);
 		const [menu, picker] = harness.selectCalls;
 		assert.ok(
-			menu?.options.includes("⚙ Send target: chat"),
+			menu?.options.includes("✎  Send target: chat"),
 			`the manager entry names the live target: ${JSON.stringify(menu?.options)}`,
 		);
 		assert.equal(picker?.title, "Send notes to", "the entry opens the picker");
@@ -1378,7 +1386,7 @@ describe("gentle-notes extension wiring", () => {
 	it("sends a pending note through the keyboard manager", async () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add por teclado", project);
-		harness.setSelect("➤ #1 por teclado");
+		harness.setSelect("➤  #1 por teclado");
 		await harness.runShortcut(project);
 		await FLUSH();
 		assert.deepEqual(harness.sent, [{ content: "por teclado", options: undefined }]);
@@ -1429,23 +1437,23 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("send 2", project);
 		await FLUSH();
 
-		harness.setSelect(MANAGER_CLEAR_SENT);
+		harness.setSelect(MANAGER_CLEAR_PENDING);
 		harness.setConfirm(true);
 		await harness.runCommand("", project);
 		const options = harness.selectCalls[harness.selectCalls.length - 1]?.options ?? [];
-		assert.ok(options.includes(MANAGER_CLEAR_SENT), `the menu offers the sent clear: ${JSON.stringify(options)}`);
+		assert.ok(!options.some((o) => o.includes("Clear all sent")), `sent clear removed: ${JSON.stringify(options)}`);
 		assert.ok(options.includes(MANAGER_CLEAR_PENDING), "the menu offers the pending clear");
 		assert.ok(options.includes(MANAGER_CLEAR), "the full clear stays");
 		const afterSent = loadNotes(project);
-		assert.deepEqual(afterSent.notes.map((note) => note.text), ["queda pendiente"], "only the sent group went");
-		assert.ok(harness.notifies.some((entry) => entry.message.includes("Sent notes cleared (1)")));
+		assert.deepEqual(afterSent.notes.map((note) => note.text), ["se manda al chat"], "only the pending group went");
+		assert.ok(harness.notifies.some((entry) => entry.message.includes("Pending notes cleared (1)")));
 	});
 
 	it("clears only the pending notes from the manager", async () => {
 		await harness.sessionStart(project);
 		await harness.runCommand("add se queda enviada", project);
 		await harness.runCommand("add esta se borra", project);
-		harness.setSelect(`➤ #1 se queda enviada`);
+		harness.setSelect(`➤  #1 se queda enviada`);
 		await harness.runCommand("send", project);
 		await FLUSH();
 
@@ -1463,7 +1471,7 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("send 1", project);
 		await FLUSH();
 
-		harness.setSelect(MANAGER_CLEAR_SENT);
+		// harness.setSelect(MANAGER_CLEAR_SENT); // removed
 		harness.setConfirm(false);
 		await harness.runCommand("", project);
 		assert.equal(loadNotes(project).notes.length, 1, "a declined confirm removes nothing");
@@ -1479,7 +1487,7 @@ describe("gentle-notes extension wiring", () => {
 		// With no notes at all, neither scoped clear is offered.
 		await harness.runCommand("", project);
 		const options = harness.selectCalls[harness.selectCalls.length - 1]?.options ?? [];
-		assert.ok(!options.includes(MANAGER_CLEAR_SENT), "no sent clear without sent notes");
+		assert.ok(!options.some((o) => o.includes("Clear all sent")), "no sent clear without sent notes");
 		assert.ok(!options.includes(MANAGER_CLEAR_PENDING), "no pending clear without pending notes");
 	});
 
@@ -1570,6 +1578,164 @@ describe("gentle-notes extension wiring", () => {
 		assert.deepEqual(widget.render(80), []);
 		sidebarState(harness.fakeTui).visibility = { notes: true };
 		assert.equal(widget.render(80).length, 2);
+	});
+
+	it("counts total and pending in the header and sent in the section header (L45)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add queda pendiente", project);
+		await harness.runCommand("add se manda", project);
+		await harness.runCommand("send 2", project);
+		await FLUSH();
+		harness.buildWidget();
+		const lines = harness.rail().render(46);
+		assert.ok(lines[1]?.includes("2 total, 1 pend"), `the header counts total and pending: ${JSON.stringify(lines[1])}`);
+		assert.ok(!lines[1]?.includes("sent"), "the header no longer repeats the sent count");
+		const headerRow = lines.findIndex((line) => line.includes("sent"));
+		assert.ok(headerRow > 0, `the section header paints: ${lines.join(" | ")}`);
+		assert.ok(lines[headerRow]?.includes("1 sent"), `the section counts its own notes: ${lines[headerRow]}`);
+	});
+
+	it("deletes one sent note from its row's ✕ and keeps the others (L45)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("add primera enviada", project);
+		await harness.runCommand("add segunda enviada", project);
+		await harness.runCommand("send 1", project);
+		await harness.runCommand("send 2", project);
+		await FLUSH();
+		const rail = harness.rail();
+		const lines = rail.render(46);
+		const row = lines.findIndex((line) => line.includes("primera enviada"));
+		assert.ok(row >= 0, `the sent row paints: ${lines.join(" | ")}`);
+		const column = deleteGlyphColumn(lines[row] as string);
+		assert.ok(column !== undefined, `the sent row carries its delete glyph: ${JSON.stringify(lines[row])}`);
+
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+		const state = loadNotes(project);
+		assert.deepEqual(state.notes.map((note) => note.text), ["segunda enviada"], "only the clicked sent note is gone");
+		assert.ok(harness.notifies.some((entry) => entry.message.includes("Note #1 deleted")), `the removal is announced: ${JSON.stringify(harness.notifies)}`);
+	});
+
+	it("clears every sent note from the section header's ✕ (L45)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("add se queda pendiente", project);
+		await harness.runCommand("add se borra uno", project);
+		await harness.runCommand("add se borra dos", project);
+		await harness.runCommand("send 2", project);
+		await harness.runCommand("send 3", project);
+		await FLUSH();
+		const rail = harness.rail();
+		const lines = rail.render(46);
+		const headerRow = lines.findIndex((line) => line.includes("sent"));
+		assert.ok(headerRow > 0, `the section header paints: ${lines.join(" | ")}`);
+		const span = controlSpan(lines[headerRow] as string, "Delete All");
+		assert.ok(span !== undefined, `the group delete paints: ${JSON.stringify(lines[headerRow])}`);
+
+		rail.handleMouse?.(mouse("click", span.start, headerRow, 46));
+		await FLUSH();
+		const state = loadNotes(project);
+		assert.deepEqual(state.notes.map((note) => note.text), ["se queda pendiente"], "the sent group went, the pending note stayed");
+		assert.ok(
+			harness.notifies.some((entry) => entry.message.includes("Sent notes cleared (2)")),
+			`the group clear is announced: ${JSON.stringify(harness.notifies)}`,
+		);
+		// The empty group takes its header with it: nothing left to collapse.
+		assert.ok(!rail.render(46).some((line) => line.includes("sent")), "the section header leaves with its notes");
+	});
+
+	it("paints the sent row's delete with the hover role and drops it on exit (L45)", async () => {
+		await harness.sessionStart(project);
+		harness.buildWidget();
+		await harness.runCommand("add una enviada con boton", project);
+		const rail = harness.rail();
+		const { row, column } = glyphRow(rail.render(46));
+		rail.handleMouse?.(mouse("click", column, row, 46));
+		await FLUSH();
+		const sentRow = rail.render(46).findIndex((line) => line.includes("una enviada con boton"));
+		assert.ok(sentRow >= 0, "the sent row paints");
+		const deleteColumn = deleteGlyphColumn(rail.render(46)[sentRow] as string) as number;
+
+		rail.handleMouse?.(mouse("move", deleteColumn, sentRow, 46));
+		const hovered = rail.render(46)[sentRow] ?? "";
+		assert.ok(hovered.includes(`${ACCENT}×`), `hover paints the accent role: ${JSON.stringify(hovered)}`);
+		rail.handleMouse?.(mouse("move", 6, sentRow, 46));
+		const idle = rail.render(46)[sentRow] ?? "";
+		assert.ok(idle.includes(`${MUTED}×`), `leaving the glyph restores the muted role: ${JSON.stringify(idle)}`);
+	});
+
+	it("deletes a sent note and clears the rest from the expanded compact (L45)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add compacta uno", project);
+		await harness.runCommand("add compacta dos", project);
+		await harness.runCommand("send 1", project);
+		await harness.runCommand("send 2", project);
+		await FLUSH();
+		const widget = harness.buildWidget();
+		widget.render(80);
+		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		const lines = widget.render(80);
+		const row = lines.findIndex((line) => line.includes("compacta uno") && line.includes("✓"));
+		assert.ok(row >= 0, `the expanded compact lists the sent note: ${lines.join(" | ")}`);
+		const column = deleteGlyphColumn(lines[row] as string);
+		assert.ok(column !== undefined, `the compact sent row carries its delete glyph: ${JSON.stringify(lines[row])}`);
+
+		widget.handleMouse?.(mouse("click", column, row, 80));
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes.map((note) => note.text), ["compacta dos"], "only that sent note went");
+
+		const after = widget.render(80);
+		const headerRow = after.findIndex((line) => line.includes("sent"));
+		assert.ok(headerRow >= 0, `the compact section header paints: ${after.join(" | ")}`);
+		const span = controlSpan(after[headerRow] as string, "Delete All");
+		assert.ok(span !== undefined, `the compact group delete paints: ${JSON.stringify(after[headerRow])}`);
+		widget.handleMouse?.(mouse("click", span.start, headerRow, 80));
+		await FLUSH();
+		assert.deepEqual(loadNotes(project).notes, [], "the compact header cleared the remaining sent note");
+	});
+
+	it("collapses the sent section from the compact list's own control (L45)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add compacta pendiente", project);
+		await harness.runCommand("add compacta enviada", project);
+		await harness.runCommand("send 2", project);
+		await FLUSH();
+		const widget = harness.buildWidget();
+		widget.render(80);
+		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		const lines = widget.render(80);
+		const headerRow = lines.findIndex((line) => line.includes("sent"));
+		assert.ok(headerRow >= 0, `the compact section header paints: ${lines.join(" | ")}`);
+		const span = controlSpan(lines[headerRow] as string, "Collapse");
+		assert.ok(span !== undefined, `the compact section control paints: ${JSON.stringify(lines[headerRow])}`);
+
+		widget.handleMouse?.(mouse("click", span.start, headerRow, 80));
+		await FLUSH();
+		const folded = widget.render(80);
+		// The compact subtitle previews the newest note's first words, so the
+		// folded assertion goes by the sent row's own ↶ instead of its text.
+		assert.ok(!folded.some((line) => line.includes("↶")), `the sent row folds away: ${folded.join(" | ")}`);
+		const foldedRow = folded.findIndex((line) => line.includes("sent"));
+		assert.ok(folded[foldedRow]?.includes("Expand"), `the control flips inside the compact: ${folded[foldedRow]}`);
+	});
+
+	it("paints every manager entry with one glyph family and one label column (S11)", async () => {
+		await harness.sessionStart(project);
+		await harness.runCommand("add queda pendiente", project);
+		await harness.runCommand("add se manda", project);
+		await harness.runCommand("send 2", project);
+		await FLUSH();
+		harness.setSelect("Close");
+		await harness.runCommand("", project);
+		const options = harness.selectCalls[harness.selectCalls.length - 1]?.options ?? [];
+		assert.ok(options.length > 1, `the manager opened: ${JSON.stringify(options)}`);
+		const entries = options.filter((option) => option !== "Close");
+		assert.ok(!entries.some((option) => option.includes("⚙")), `the emoji-capable gear is gone: ${JSON.stringify(entries)}`);
+		assert.ok(entries.some((option) => option.startsWith("✎")), `the send target keeps a glyph: ${JSON.stringify(entries)}`);
+		assert.ok(entries.some((option) => option.startsWith("＋")), `the add entry keeps its glyph: ${JSON.stringify(entries)}`);
+		const columns = new Set(entries.map((option) => managerGlyphColumns(option)));
+		assert.deepEqual([...columns], [3], `every label starts in the same column: ${JSON.stringify(entries)}`);
 	});
 
 	it("uninstalls the widget on session shutdown", async () => {

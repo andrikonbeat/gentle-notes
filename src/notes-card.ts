@@ -8,6 +8,11 @@
 // physical line, so every line closes its own SGR 9 before padding and rails.
 // Glyphs: pending ✉ (accent), sent ✓ (success, dim strikethrough), send
 // affordance ➤ (muted, accent while hovered, rail rows only).
+//
+// One delete glyph for the whole card — rows and the sent section's header
+// alike — and it is a single-column, text-presentation dingbat (×, U+00D7),
+// the same weight and size as the ✓ and the ➤ beside it (L45). The smaller,
+// thinner × (U+00D7) it replaced read as a different icon set.
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { NOTE_STATUS, notesSummary, stripControlSequences, type NoteTask, type NotesState, type NotesSummary } from "./notes-state.ts";
@@ -23,8 +28,10 @@ export type NoteStatusKey = keyof typeof NOTE_GLYPH;
 /** Hoverable send affordance drawn at the end of a pending rail row. */
 export const SEND_GLYPH = "➤";
 
-/** Per-row delete affordance after the send glyph (L27); muted, accent while
- * hovered — same grammar as the send glyph. */
+/** Delete affordance: after the send glyph on a pending row (L27), after the
+ * ↶ on a sent row, and closing the sent section's header as the group action
+ * that removes every sent note (L45). Muted at rest, accent while hovered —
+ * the send glyph's grammar. */
 export const DELETE_GLYPH = "×";
 
 /** The trailing affordance of a pending row that already travelled: it goes
@@ -63,10 +70,10 @@ export interface NotesCardView {
 	hits: NotesCardHit[];
 	/** Sent rows, mapped the same way, for the restore affordance. */
 	sentHits: NotesCardHit[];
-	/** The "✓ N sent ▾ Collapse" row: where it landed and the control text the
-	 * click map looks for on that rendered line. Absent when no summary is
-	 * painted (no sent notes, or a short expanded list). */
-	sentHeader?: { row: number; control: string };
+	/** The "N sent ▾ Collapse Delete All" row: where it landed, the control text and the
+	 * group delete glyph the click map looks for on that rendered line. Absent
+	 * when no summary is painted (no sent notes at all). */
+	sentHeader?: { row: number; control: string; remove: string };
 	summary: NotesSummary;
 	/** Row index where the hidden note's inline editor belongs. Set only when
 	 * hiddenNoteId named a pending note that was skipped from the body. */
@@ -125,7 +132,7 @@ function foldedText(first: string, rest: readonly string[], width: number): stri
 }
 
 /** Pending rail row: ✉ glyph, air, text padded to the right edge, air, ➤ send
- * affordance (accent while hovered, muted otherwise), air, ✕ delete affordance
+ * affordance (accent while hovered, muted otherwise), air, × delete affordance
  * (L27, same hover grammar); wrapped continuations indent to the text column. */
 export function pendingRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, hoveredId?: number, folded = false, deleteHoveredId?: number): string[] {
 	// Three glyphs flank the text — status lead, send affordance, delete
@@ -152,19 +159,21 @@ export function pendingRowLines(note: NoteTask, theme: NotesCardTheme, inner: nu
 }
 
 /** Sent rail row: ✓ success glyph, air, the note struck through and dim per
- * line, and the ↶ restore affordance right-aligned (muted, accent while
- * hovered) so a sent note can go back to pending with one click; wrapped
- * continuations indent to the text column. */
-export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, folded = false, restoreHoveredId?: number): string[] {
-	// Lead glyph, two columns of air, the text column, two more, and the
-	// restore glyph: the row fills `inner` columns exactly.
-	const width = Math.max(1, inner - GLYPH_GAP * 2 - 2);
+ * line, then the ↶ restore and × delete affordances right-aligned (muted,
+ * accent while hovered) so a sent note can go back to pending — or leave the
+ * list for good — with one click (L45); wrapped continuations indent to the
+ * text column. */
+export function sentRowLines(note: NoteTask, theme: NotesCardTheme, inner: number, folded = false, restoreHoveredId?: number, deleteHoveredId?: number): string[] {
+	// Three glyphs flank the text — lead, ↶ and × — each keeping its two
+	// columns of air, exactly like a pending row.
+	const width = Math.max(1, inner - GLYPH_GAP * 3 - 3);
 	const segments = wrapNoteText(sanitizeNoteText(note.text), width);
 	const [first = "", ...rest] = segments;
 	const restoreRole = restoreHoveredId === note.id ? "accent" : "muted";
+	const deleteRole = deleteHoveredId === note.id ? "accent" : "muted";
 	const head = folded ? padToColumns(foldedText(first, rest, width), width) : padToColumns(first, width);
 	const lines = [
-		`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("dim", theme.strikethrough(head))}${" ".repeat(GLYPH_GAP)}${theme.fg(restoreRole, RESTORE_GLYPH)}`,
+		`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("dim", theme.strikethrough(head))}${" ".repeat(GLYPH_GAP)}${theme.fg(restoreRole, RESTORE_GLYPH)}${" ".repeat(GLYPH_GAP)}${theme.fg(deleteRole, DELETE_GLYPH)}`,
 	];
 	if (folded) return lines;
 	for (const segment of rest) lines.push(`${" ".repeat(GLYPH_GAP + 1)}${theme.fg("dim", theme.strikethrough(segment))}`);
@@ -191,7 +200,7 @@ function padToColumns(text: string, width: number): string {
  * one line (the per-note view state; the header control folds every note by
  * naming them all). sentCollapsed hides the individual sent notes behind the
  * summary row with a collapse/expand control. */
-export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number, options: { foldedIds?: ReadonlySet<number>; hoveredDeleteId?: number; hoveredRestoreId?: number; sentCollapsed?: boolean; sentCollapseHovered?: boolean } = {}): NotesCardView {
+export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: number, hoveredId?: number, hiddenNoteId?: number, options: { foldedIds?: ReadonlySet<number>; hoveredDeleteId?: number; hoveredRestoreId?: number; sentCollapsed?: boolean; sentCollapseHovered?: boolean; sentDeleteHovered?: boolean } = {}): NotesCardView {
 	const foldedIds = options.foldedIds ?? new Set<number>();
 	const summary = notesSummary(state);
 	const pending = state.notes.filter((note) => note.status === NOTE_STATUS.PENDING);
@@ -199,7 +208,7 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 	const bodyRows: string[] = [];
 	const hits: NotesCardHit[] = [];
 	const sentHits: NotesCardHit[] = [];
-	let sentHeader: { row: number; control: string } | undefined;
+	let sentHeader: { row: number; control: string; remove: string } | undefined;
 	let editSlot: number | undefined;
 	const pushPending = (note: NoteTask): void => {
 		if (note.id === hiddenNoteId) {
@@ -211,11 +220,12 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 	};
 	const sentCollapsed = options.sentCollapsed;
 	const sentCollapseHovered = options.sentCollapseHovered ?? false;
+	const sentDeleteHovered = options.sentDeleteHovered ?? false;
 	/** The sent note at the top of a rendered row; null while the row belongs
 	 * to a pending note, the editor or the frame. */
 	const pushSent = (note: NoteTask): void => {
 		sentHits.push({ row: bodyRows.length, id: note.id });
-		bodyRows.push(...sentRowLines(note, theme, inner, foldedIds.has(note.id), options.hoveredRestoreId));
+		bodyRows.push(...sentRowLines(note, theme, inner, foldedIds.has(note.id), options.hoveredRestoreId, options.hoveredDeleteId));
 	};
 
 	// Long lists fold their sent notes by default (TODO grammar) and a short
@@ -225,16 +235,22 @@ export function buildNotesCard(state: NotesState, theme: NotesCardTheme, inner: 
 	const isLongList = state.notes.length > NOTES_ROW_CAP;
 	const effectiveSentCollapsed = sentCollapsed ?? isLongList;
 	const control = effectiveSentCollapsed ? "▸ Expand" : "▾ Collapse";
-	/** The `✓ N sent` header and the rows it labels, pushed where the sent
-	 * section actually starts. The control is always there when the section
-	 * exists: a toggle that vanished once flipped would strand the section —
-	 * collapsed with no way in on a short list, expanded with no way out on a
-	 * long one — which is exactly what a short backlog used to do. */
+	/** The `N sent ▾ Collapse Delete All` header and the rows it labels, pushed where
+	 * the sent section actually starts. It counts the group in words instead of
+	 * leading with the status glyph (L45): that ✓ belongs to the rows below,
+	 * and the reader who wants the group's count reads it here. The collapse
+	 * control is always there when the section exists — a toggle that vanished
+	 * once flipped would strand the section, collapsed with no way in on a
+	 * short list and expanded with no way out on a long one — and the trailing
+	 * Delete All is the group delete: one click removes every sent note, and it stays
+	 * reachable while the section is collapsed, when the rows it removes are
+	 * not on screen at all. */
 	const pushSentSection = (): void => {
 		if (sent.length === 0) return;
 		const controlStyle = sentCollapseHovered ? "warning" : "accent";
-		sentHeader = { row: bodyRows.length, control };
-		bodyRows.push(`${theme.fg("success", NOTE_GLYPH.sent)}${" ".repeat(GLYPH_GAP)}${theme.fg("muted", `${sent.length} sent`)}  ${theme.fg(controlStyle, control)}`);
+		const deleteStyle = sentDeleteHovered ? "accent" : "muted";
+		sentHeader = { row: bodyRows.length, control, remove: "Delete All" };
+		bodyRows.push(`${theme.fg("muted", `${sent.length} sent`)}  ${theme.fg(controlStyle, control)}  ${theme.fg(deleteStyle, "Delete All")}`);
 		if (!effectiveSentCollapsed) for (const note of sent) pushSent(note);
 	};
 
@@ -420,6 +436,9 @@ export interface CompactNotesView {
 	sentHits: NotesCardHit[];
 	/** Body rows behind the expanded window: the widget clamps its scroll with it. */
 	bodyTotal: number;
+	/** The sent section's header — `N sent ▾ Collapse Delete All` — when the window
+	 * shows it, in rendered coordinates, with both control needles (L45). */
+	sentHeader?: { row: number; control: string; remove: string };
 }
 
 /** The compact notepad above the editor: one card-styled line — title, the
@@ -435,11 +454,16 @@ export function buildCompactNotesRow(
 	state: NotesState,
 	theme: NotesCardTheme,
 	width: number,
-	options: { collapsed: boolean; controlHovered?: boolean; hoveredId?: number; hoveredDeleteId?: number; hoveredRestoreId?: number; scrollTop?: number },
+	options: { collapsed: boolean; controlHovered?: boolean; hoveredId?: number; hoveredDeleteId?: number; hoveredRestoreId?: number; scrollTop?: number; sentCollapsed?: boolean; sentCollapseHovered?: boolean; sentDeleteHovered?: boolean },
 ): CompactNotesView {
 	if (state.notes.length === 0) return { rows: [], headerRow: 0, hits: [], sentHits: [], bodyTotal: 0 };
 	const summary = notesSummary(state);
-	const counts = `${summary.pending} pend · ${summary.sent} sent`;
+	// Total and pending only (L45): the sent count has its own section header
+	// inside the expanded list, so repeating it here would spend the narrowest
+	// line of the UI on a number the reader already sees one row below. The
+	// comma instead of the `·` separator is one column of header budget: at 46
+	// columns the padded dot form pushed both control labels out of the header.
+	const counts = `${summary.total} total, ${summary.pending} pend`;
 	// The control begins right after the rail mark, its air and the title word
 	// — a fixed column in every style, two left of where the glyph put it —
 	// and stays hit-testable while the control itself fits, even when the
@@ -466,18 +490,25 @@ export function buildCompactNotesRow(
 	// above: pi already draws a single spacer ahead of the whole above-editor
 	// widget group, and the Todos card ends with its own blank row, so a
 	// leading row here stacked two empty lines between the two headers (L28).
-	const spaced = (rows: string[], headerRow: number, hits: NotesCardHit[], sentHits: NotesCardHit[], bodyTotal: number): CompactNotesView => ({
+	const spaced = (rows: string[], headerRow: number, hits: NotesCardHit[], sentHits: NotesCardHit[], bodyTotal: number, sentHeader?: { row: number; control: string; remove: string }): CompactNotesView => ({
 		rows: [...rows, ""],
 		headerRow,
 		control: controlSpan(rows[headerRow] ?? "", control.text),
 		hits,
 		sentHits,
 		bodyTotal,
+		...(sentHeader !== undefined ? { sentHeader } : {}),
 	});
 	if (options.collapsed) {
 		return spaced(renderPanelHeaderLine(card, theme, width), 0, [], [], 0);
 	}
-	const view = buildNotesCard(state, theme, panelInnerWidth(theme, width), options.hoveredId, undefined, { hoveredDeleteId: options.hoveredDeleteId, hoveredRestoreId: options.hoveredRestoreId });
+	const view = buildNotesCard(state, theme, panelInnerWidth(theme, width), options.hoveredId, undefined, {
+		hoveredDeleteId: options.hoveredDeleteId,
+		hoveredRestoreId: options.hoveredRestoreId,
+		sentCollapsed: options.sentCollapsed,
+		sentCollapseHovered: options.sentCollapseHovered,
+		sentDeleteHovered: options.sentDeleteHovered,
+	});
 	const total = view.bodyRows.length;
 	// The expanded list windows itself like the rail's body (L26): the wheel
 	// scrolls it and the hint reports the range, so a long backlog is
@@ -494,5 +525,10 @@ export function buildCompactNotesRow(
 	const windowed = (candidates: NotesCardHit[]): NotesCardHit[] => candidates
 		.filter((hit) => hit.row >= scrollTop && hit.row < scrollTop + visible.length)
 		.map((hit) => ({ ...hit, row: bodyStart + hit.row - scrollTop }));
-	return spaced(rows, headerRow, windowed(view.hits), windowed(view.sentHits), total);
-}
+	// The sent section's header follows the same window rule as the rows: a
+	// control scrolled out of sight has no span to click.
+	const section = view.sentHeader;
+	const sectionHeader = section !== undefined && section.row >= scrollTop && section.row < scrollTop + visible.length
+		? { row: bodyStart + section.row - scrollTop, control: section.control, remove: section.remove }
+		: undefined;
+	return spaced(rows, headerRow, windowed(view.hits), windowed(view.sentHits), total, sectionHeader);	}

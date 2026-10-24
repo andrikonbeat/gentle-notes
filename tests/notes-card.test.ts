@@ -4,6 +4,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { NOTE_STATUS, addNote, emptyNotes, markSent, type NoteTask } from "../src/notes-state.ts";
 import {
 	NOTES_ROW_CAP,
+	DELETE_GLYPH,
 	NOTE_GLYPH,
 	REVERT_GLYPH,
 	SEND_GLYPH,
@@ -247,16 +248,18 @@ describe("delete affordance (L27)", () => {
 describe("sentRowLines", () => {
 	it("renders the sent glyph with strikethrough dim text and the restore glyph", () => {
 		const lines = sentRowLines(sentNote(1, "hola"), theme, 46);
-		// 46 columns: lead glyph, two of air, a 40-column text pad, two more and ↶.
-		assert.deepEqual(lines, [`<success>✓</success>  <dim>~~${"hola".padEnd(40)}~~</dim>  <muted>↶</muted>`]);
+		// 46 columns: lead glyph, two of air, a 37-column text pad, then ↶ and ✕
+		// with their own two columns of air (L45).
+		assert.deepEqual(lines, [`<success>✓</success>  <dim>~~${"hola".padEnd(37)}~~</dim>  <muted>↶</muted>  <muted>×</muted>`]);
 	});
 
 	it("applies strikethrough per physical wrapped line", () => {
 		const lines = sentRowLines(sentNote(1, "uno dos tres"), theme, 12);
 		assert.deepEqual(lines, [
-			`<success>✓</success>  <dim>~~uno   ~~</dim>  <muted>↶</muted>`,
+			`<success>✓</success>  <dim>~~uno~~</dim>  <muted>↶</muted>  <muted>×</muted>`,
 			`   <dim>~~dos~~</dim>`,
-			`   <dim>~~tres~~</dim>`,
+			`   <dim>~~tre~~</dim>`,
+			`   <dim>~~s~~</dim>`,
 		]);
 	});
 
@@ -271,7 +274,8 @@ describe("sentRowLines", () => {
 		};
 		const sentRow = sentRowLines(sentNote(1, "漢字↶"), ansi, 46)[0] as string;
 		assert.equal(visibleWidth(sentRow), 46, "the sent row fills its columns exactly");
-		assert.equal(restoreGlyphColumn(sentRow), visibleWidth(sentRow) - 1, "the restore target is the last cell, not the note's own glyph");
+		assert.equal(deleteGlyphColumn(sentRow), visibleWidth(sentRow) - 1, "the delete target is the last cell, not the note's own glyph");
+		assert.equal(restoreGlyphColumn(sentRow), visibleWidth(sentRow) - 4, "the restore target keeps its own column beside it");
 		const wide = addNote(emptyNotes(), "漢字➤", 1);
 		const plain = addNote(emptyNotes(), "ascii", 1);
 		assert.ok(typeof wide !== "string" && typeof plain !== "string", "the pending notes are accepted");
@@ -313,6 +317,75 @@ describe("sentRowLines", () => {
 	});
 });
 
+describe("sent section: one row delete and one group delete (L45)", () => {
+	// Real ANSI escapes: the tag fakes inflate the visible columns.
+	const ansiTheme: NotesCardTheme = {
+		fg: (role, text) => `\x1b[38;5;${role === "accent" ? 205 : role === "muted" ? 242 : role === "success" ? 46 : 255}m${text}\x1b[0m`,
+		strikethrough: (text) => `\x1b[9m${text}\x1b[29m`,
+	};
+
+	it("uses a single delete glyph in the whole card", () => {
+		assert.equal(DELETE_GLYPH, "×", "the smaller, thinner × is gone: one weight and one size (S11)");
+		assert.equal(visibleWidth(DELETE_GLYPH), 1, "the glyph takes exactly one column");
+	});
+
+	it("carries a delete glyph beside the restore glyph on every sent row", () => {
+		const row = sentRowLines(sentNote(1, "corta"), ansiTheme, 46)[0] as string;
+		const restore = restoreGlyphColumn(row);
+		const remove = deleteGlyphColumn(row);
+		assert.ok(restore !== undefined && remove !== undefined, `both affordances paint: ${JSON.stringify(row)}`);
+		assert.equal(remove - restore, 3, `air between the two affordances: restore ${restore}, delete ${remove}`);
+		assert.equal(remove, visibleWidth(row) - 1, "the delete glyph closes the row");
+		assert.equal(visibleWidth(row), 46, "the row fills its columns exactly");
+	});
+
+	it("paints the sent row's delete with the hover role and keeps ↶ idle", () => {
+		const idle = sentRowLines(sentNote(3, "corta"), ansiTheme, 46)[0] as string;
+		assert.ok(idle.includes("\x1b[38;5;242m×\x1b[0m"), `idle paints muted: ${JSON.stringify(idle)}`);
+		const hovered = sentRowLines(sentNote(3, "corta"), ansiTheme, 46, false, undefined, 3)[0] as string;
+		assert.ok(hovered.includes("\x1b[38;5;205m×\x1b[0m"), `hover paints the accent role: ${JSON.stringify(hovered)}`);
+		assert.ok(hovered.includes("\x1b[38;5;242m↶\x1b[0m"), "the restore glyph keeps its idle role");
+	});
+
+	it("keeps both sent affordances at one column on folded and unfolded rows", () => {
+		const note = sentNote(1, "una nota bastante larga como para plegarse a una sola linea visible");
+		const unfolded = sentRowLines(note, ansiTheme, 30)[0] as string;
+		const folded = sentRowLines(note, ansiTheme, 30, true)[0] as string;
+		assert.equal(deleteGlyphColumn(folded), deleteGlyphColumn(unfolded));
+		assert.equal(restoreGlyphColumn(folded), restoreGlyphColumn(unfolded));
+	});
+
+	it("drops the ✓ lead from the section header and paints the group ×", () => {
+		const state = { notes: [pendingNote(1, "p"), sentNote(2, "s")], nextId: 3 };
+		const view = buildNotesCard(state, theme, 46);
+		const header = view.bodyRows[1] as string;
+		assert.ok(!header.includes(`<success>${NOTE_GLYPH.sent}</success>`), `the header no longer leads with the status glyph: ${header}`);
+		assert.equal(header, `<muted>1 sent</muted>  <accent>▾ Collapse</accent>  <muted>Delete All</muted>`);
+		assert.deepEqual(view.sentHeader, { row: 1, control: "▾ Collapse", remove: "Delete All" }, "both controls are hit-testable");
+	});
+
+	it("lights the group delete with the hover role", () => {
+		const state = { notes: [sentNote(2, "s")], nextId: 3 };
+		const view = buildNotesCard(state, theme, 46, undefined, undefined, { sentDeleteHovered: true });
+		assert.equal(view.bodyRows[0], `<muted>1 sent</muted>  <accent>▾ Collapse</accent>  <accent>Delete All</accent>`);
+	});
+
+	it("keeps the group delete while the section is collapsed", () => {
+		const state = { notes: [pendingNote(1, "p"), sentNote(2, "s")], nextId: 3 };
+		const view = buildNotesCard(state, theme, 46, undefined, undefined, { sentCollapsed: true });
+		assert.equal(view.sentHits.length, 0, "the rows are folded away");
+		assert.equal(view.sentHeader?.remove, "Delete All", "the group delete is still offered");
+	});
+
+	it("keeps the group delete on the row when the header is tight", () => {
+		const state = { notes: [pendingNote(1, "p"), sentNote(2, "s"), sentNote(3, "t")], nextId: 4 };
+		const view = buildNotesCard(state, theme, 20);
+		const header = view.bodyRows[view.sentHeader?.row ?? -1] as string;
+		assert.ok(header !== undefined, `the header paints on a narrow card: ${JSON.stringify(view.bodyRows)}`);
+		assert.ok(header.includes("Delete All"), `the group delete survives the narrow card: ${header}`);
+	});
+});
+
 describe("buildNotesCard (body rows, no chrome)", () => {
 	it("returns no body rows and no hits for an empty state", () => {
 		assert.deepEqual(buildNotesCard(emptyNotes(), theme, 46), {
@@ -333,8 +406,8 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 		assert.deepEqual(view.bodyRows, [
 			`<accent>✉</accent>  <text>${"aa".padEnd(37)}</text>  <muted>➤</muted>  <muted>×</muted>`,
 			`<accent>✉</accent>  <text>${"cc".padEnd(37)}</text>  <muted>➤</muted>  <muted>×</muted>`,
-			`<success>✓</success>  <muted>1 sent</muted>  <accent>▾ Collapse</accent>`,
-			`<success>✓</success>  <dim>~~${"bb".padEnd(40)}~~</dim>  <muted>↶</muted>`,
+			`<muted>1 sent</muted>  <accent>▾ Collapse</accent>  <muted>Delete All</muted>`,
+			`<success>✓</success>  <dim>~~${"bb".padEnd(37)}~~</dim>  <muted>↶</muted>  <muted>×</muted>`,
 		]);
 		assert.deepEqual(view.hits, [{ row: 0, id: 1 }, { row: 1, id: 3 }]);
 		assert.deepEqual(view.sentHits, [{ row: 3, id: 2 }], "the sent row maps to its own hit list, under the header");
@@ -349,7 +422,7 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 		const view = buildNotesCard(state, theme, 40);
 		assert.equal(view.bodyRows.length, 18);
 		// Auto-collapsed sent notes show summary with expand control
-		assert.equal(view.bodyRows[0], `<success>✓</success>  <muted>3 sent</muted>  <accent>▸ Expand</accent>`);
+		assert.equal(view.bodyRows[0], `<muted>3 sent</muted>  <accent>▸ Expand</accent>  <muted>Delete All</muted>`);
 		assert.equal(view.bodyRows[1], `<accent>✉</accent>  <text>${"p1".padEnd(31)}</text>  <muted>➤</muted>  <muted>×</muted>`);
 		assert.equal(view.bodyRows[view.bodyRows.length - 1], `<muted>… 5 more</muted>`);
 		assert.equal(view.hits.length, 16);
@@ -360,9 +433,9 @@ describe("buildNotesCard (body rows, no chrome)", () => {
 	it("keeps the sent control on a short list", () => {
 		const state = { notes: [pendingNote(1, "pendiente"), sentNote(2, "enviada a"), sentNote(3, "enviada b")], nextId: 4 };
 		const view = buildNotesCard(state, theme, 40);
-		const header = `<success>✓</success>  <muted>2 sent</muted>  <accent>▾ Collapse</accent>`;
+		const header = `<muted>2 sent</muted>  <accent>▾ Collapse</accent>  <muted>Delete All</muted>`;
 		assert.equal(view.bodyRows[1], header, `header opens the sent section: ${JSON.stringify(view.bodyRows)}`);
-		assert.deepEqual(view.sentHeader, { row: 1, control: "▾ Collapse" }, "the control is clickable");
+		assert.deepEqual(view.sentHeader, { row: 1, control: "▾ Collapse", remove: "Delete All" }, "the control and the group delete are clickable");
 		assert.equal(view.sentHits.length, 2, "the rows it labels are right below it");
 	});
 
@@ -488,7 +561,7 @@ describe("buildCompactNotesRow", () => {
 		assert.ok(!row.includes("✉"), `the header drops the notes glyph: ${row}`);
 		assert.ok(row.includes("Notes"), `title paints: ${row}`);
 		assert.ok(row.includes("▸ Expand"), `control inline after the title: ${row}`);
-		assert.ok(row.includes("2 pend · 1 sent"), `summary trails: ${row}`);
+		assert.ok(row.includes("3 total, 2 pend"), `summary trails: ${row}`);
 		assert.ok(row.includes("— tres"), `the last note trails the counts: ${row}`);
 		assert.ok(row.startsWith(" \x1b[48;5;22m"), `tone background behind the line: ${row}`);
 		assert.deepEqual(view.control, { start: 10, end: 17 });
@@ -503,7 +576,7 @@ describe("buildCompactNotesRow", () => {
 		state = unwrap(addNote(state, "una nota larguisima que se extiende mucho mas alla de una sola fila visible del bloque", 2)).state;
 		const view = buildCompactNotesRow(state, floatTheme, 60, { collapsed: true });
 		const row = view.rows[0]!;
-		assert.ok(row.includes("2 pend · 0 sent"), `counts always paint: ${row}`);
+		assert.ok(row.includes("2 total, 2 pend"), `counts always paint: ${row}`);
 		assert.ok(row.includes("— una nota"), `the preview opens with the note: ${row}`);
 		assert.ok(row.includes("…"), `a clipped preview marks the cut: ${row}`);
 		assert.ok(!row.includes("bloque"), "the preview never runs past the row");
@@ -572,6 +645,24 @@ describe("buildCompactNotesRow", () => {
 		assert.ok(view.rows[3]?.includes("nota 3"), `the window starts at the scrolled note: ${view.rows[3]}`);
 		const clamped = buildCompactNotesRow(state, floatTheme, 60, { collapsed: false, scrollTop: 99 });
 		assert.ok(clamped.rows.some((line) => line.includes("↑↓ 3–10/10")), `scrollTop clamps to the last window: ${clamped.rows.join(" | ")}`);
+	});
+
+	it("exposes the sent section header of the expanded list, both controls (L45)", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
+		const view = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: false });
+		assert.deepEqual(view.sentHeader, { row: 5, control: "▾ Collapse", remove: "Delete All" }, "the compact maps the section header into rendered rows");
+		const header = view.rows[5] as string;
+		assert.ok(header.includes("1 sent"), `the header counts the sent notes: ${header}`);
+		assert.ok(header.includes("Delete All"), `the group delete paints in the compact: ${header}`);
+	});
+
+	it("drops the section header from the compact when the window hides it (L45)", () => {
+		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "float";
+		let state = emptyNotes();
+		for (let id = 1; id <= 9; id++) state = unwrap(addNote(state, `nota ${id}`, id)).state;
+		state = unwrap(markSent(state, 9, 99)).state;
+		const view = buildCompactNotesRow(state, floatTheme, 60, { collapsed: false });
+		assert.equal(view.sentHeader, undefined, `the header sits outside the window: ${view.rows.join(" | ")}`);
 	});
 
 	it("hit-tests the expand control in the outlined style too (P1.5)", () => {
