@@ -22,14 +22,16 @@ are ready — one click from the rail, or one pick from the manager dialog.
 | Topic | Behavior |
 |-------|----------|
 | Storage | One JSON file per project under `~/.pi/gentle-ai/notes/`, honoring `GENTLE_PI_CONFIG_HOME`. Atomic writes, serialized per file inside one process (see *One writer per process* below). |
-| Fullscreen sidebar | Paints as the `notes` rail section (below Todo) when gentle-shell supports it. Click the field to write (`Enter` saves, `Esc` — or a click anywhere else — returns the keyboard to the chat), click a note's text to edit it inline, double click to fold it back to its first line, click `➤` to send (its target is two columns wide on each side), and drive the block from the header controls (`▾ Collapse` / `▾ Fold`). |
-| Regular mode | One summary line above the editor with a blank line of air on each side: `Notes ▸ Expand  N pend · M sent — <the last note's first words>`, the preview clipped to the window. Hidden while empty. |
+| Fullscreen sidebar | Paints as the `notes` rail section (below Todo) when gentle-shell supports it. Click the field to write (`Enter` saves, `Esc` — or a click anywhere else — returns the keyboard to the chat), click a note's text to edit it inline, double click to fold it back to its first line, click `➤` to send (its target is two columns wide on each side), and drive the block from the header controls (`▾ Collapse` / `▾ Fold`). The sent section header (`N sent  ▾ Collapse  Delete All`) folds the section from its own control and empties it with `Delete All`. |
+| Regular mode | One summary line above the editor with a blank line of air on each side: `Notes ▸ Expand  N total, M pend — <the last note's first words>`, the preview clipped to the window. Hidden while empty. |
 | While the agent runs | The note is queued as a follow-up prompt (`deliverAs: "followUp"`), never interrupting the current turn. |
 | Keyboard path | Everything works without a mouse: `/notes add <text>`, `/notes send [<id>]`, `/notes list`, `/notes clear`, `/notes collapse|expand|fold|unfold`, or `alt+n` to pick a note to send. |
-| Send target | `/notes settings [chat\|editor]`, or the `⚙ Send target` entry in the `/notes` manager (and `alt+n`). `chat` hands the note to the agent immediately; `editor` loads it into the chat's input so it can be edited before pressing Enter. The choice is plugin-wide and lives in `settings.json` beside the per-project stores, so it survives projects and restarts. |
-| Statuses | Pending `✉` (accent) → sent `✓` (success, dim, struck through, same grammar as gentle-shell's Todo). Long lists fold into `✓ N sent`. |
-| Trailing glyph | A pending note the agent never saw carries `×` (delete). Once a note has been sent, that glyph becomes `✓`: one click puts it back in the sent list **without sending it again** — the way out of a mistaken restore. Same column, same grammar, so only the glyph says which action is armed. |
+| Send target | `/notes settings [chat\|editor]`, or the `✎  Send target` entry in the `/notes` manager (and `alt+n`). `chat` hands the note to the agent immediately; `editor` loads it into the chat's input so it can be edited before pressing Enter. The choice is plugin-wide and lives in `settings.json` beside the per-project stores, so it survives projects and restarts. |
+| Statuses | Pending `✉` (accent) → sent `✓` (success, dim, struck through, same grammar as gentle-shell's Todo). The sent count lives in its own section header, `N sent`, and the header summary keeps `total` and `pend` only. |
+| Trailing glyph | One delete glyph, `×`, across the whole card: a pending note the agent never saw carries it at the right edge, and a sent row carries it after its `↶`. A sent row's `↶` puts the note back in the pending list **without sending it again** — the way out of a mistaken restore — and its `×` removes that single note; the section header's `Delete All` removes all of them. |
+| Manager glyphs | Every `/notes` manager entry starts with one single-column, text-presentation glyph (`＋` add, `✎` send target, `×` clear, `➤` note) and lands its label in the same column, so no entry renders heavier or larger than its neighbours. |
 | Visibility | `visibility.notes` on the shared sidebar state hides the section, mirroring `visibility.todo`. |
+| Shell updates | gentle-pi replaces itself at startup and its sidebar paints a hardcoded section list without `notes`, so an update makes the notes vanish from the sidebar until the local rail patch is re-applied: run `npm run patch:shell-rail` and restart Pi. `--check` reports whether the patch is present. |
 
 ## Install
 
@@ -61,11 +63,12 @@ To uninstall: remove the link or directory, and delete
 - The rail section needs a gentle-shell that lists `notes` among its sidebar
   sections. Until that lands upstream, everything else works: the compact row,
   the `/notes` command and the `alt+n` manager.
-- The ready stopgap patch is versioned in the repository, under
-  `proposal/rail-patch/` (`notes-rail.patch`, plus a README with what it
-  changes and how to apply it): three files, adding `notes` to the rail
-  sections plus its visibility flag, with a new upstream test
-  (`tests/shell-sidebar-layout.test.ts`, 47/47 green).
+- The patch lives in this repository: `npm run patch:shell-rail` re-applies it
+  to the installed gentle-pi (two lines: the rail section list and the
+  `visibility.notes` flag), refuses anything it does not recognise, and is safe
+  to run after every gentle-pi update. The upstream-facing form of the same
+  change — the diff plus its upstream test — is versioned under
+  `proposal/rail-patch/`.
 
 ## How it works
 
@@ -151,14 +154,15 @@ extension touches, including the ones behind runtime guards
 those declarations, delete the module and import theirs.
 
 - Feature spec and task log: `odd/tasks/gentle-notes.md`
-- Upstream patch: `proposal/rail-patch/` (stopgap, versioned; the clone it came
-  from is gitignored)
+- Rail patch: `scripts/patch-shell-rail.mjs` applies it to an installed
+  gentle-pi; `proposal/rail-patch/` is the upstream-facing form (the clone it
+  came from is gitignored)
 
 ## Next step
 
 Open the feature request (`proposal/feature-request.md`) as an issue in
 `Gentleman-Programming/gentle-shell` and wait for `status:approved` — this
 repository does not open a PR without an approved issue. Only after that does
-the rail section become a pull request; until then, apply
-`proposal/rail-patch/notes-rail.patch` by hand and load the extension in your
-daily gentle-shell session.
+the rail section become a pull request; until then, run
+`npm run patch:shell-rail` after every gentle-pi update and load the extension
+in your daily gentle-shell session.

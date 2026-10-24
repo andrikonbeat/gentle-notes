@@ -62,9 +62,10 @@ capture-and-defer surface with the same visual grammar the rail already uses:
   chat input at the caret so it can be edited first. If the agent is busy the
   note is queued as a follow-up instead of interrupting the turn.
 - **Sent notes stay, and explain themselves.** A sent note is struck through
-  with a `✓`, exactly like a done `Todo`. It can be restored to pending
-  (`↶`) — as a *draft* if it never travelled (`✓`), so restoring never sends
-  anything behind the user's back — or deleted (`×`).
+  with a `✓`, exactly like a done `Todo`. Its section header (`N sent`) folds
+  the section and carries a `Delete All` that empties it at once. Each sent row
+  can be restored to pending (`↶`) — as a *draft* if it never travelled (`✓`),
+  so restoring never sends anything behind the user's back — or deleted (`×`).
 - **Progressive views, same grammar as the Todos.** Two independent controls in
   the card header: one collapses the whole block to a single row, the other
   folds every note to its first line so the list reads like a compact Todos.
@@ -79,7 +80,7 @@ capture-and-defer surface with the same visual grammar the rail already uses:
   ended.
 - **A keyboard path for every gesture that has one.** `/notes` (manager
   dialog), `/note <text>` (capture straight from the chat), `alt+n` (manager),
-  and the `/notes send|list|clear|delete|restore|collapse|expand|fold|unfold`
+  and the `/notes add|send|list|show|restore|clear|delete|collapse|expand|fold|unfold|settings`
   subcommands. Inline text editing is the one exception today: it is click-only,
   and a keyboard caller changes a note by deleting it and adding it again.
 
@@ -104,7 +105,7 @@ capture-and-defer surface with the same visual grammar the rail already uses:
 ### What already exists, and what it costs upstream
 
 The implementation is complete and tested in a separate repository
-(`gentle-notes`: 8 source modules, 225 tests, `npm run check` green). It reaches
+(`gentle-notes`: 8 source modules, 255 tests, `npm run check` green). It reaches
 the rail through the same `Symbol.for` interop the other sections use
 (`sidebarPart(tui, "notes", bottom, rail)`), so **it needs no fork of
 gentle-shell**: it is harmless when gentle-shell is absent.
@@ -151,7 +152,7 @@ names the shape it needs in one local module and typechecks against it.
 ### How it was validated
 
 - Deterministic suite: `npm run check` → `tsc --noEmit` clean (73 errors found
-  and fixed when the compiler was first added) and **225 tests / 38 suites**
+  and fixed when the compiler was first added) and **255 tests / 40 suites**
   green. Byte-parity goldens pin the card against gentle-shell's own card
   rendering; a shrinking-width test pins the rail's "every line fits"
   contract, whose violation silently disables the whole rail layout.
@@ -165,6 +166,16 @@ names the shape it needs in one local module and typechecks against it.
   subscriber isolated from the others, and note text stripped of C0/C1 controls
   and bidi overrides before it is stored (zero-width joiners are kept, because
   emoji and complex scripts need them).
+
+### Related work on this tracker (searched 2026-10-24; neither duplicates this request)
+
+- #2302 proposes a documented rail-panel registration API for extensions,
+  motivated by exactly the private-symbol bridge this extension ships today.
+  That request defines the mechanism; this one is a concrete consumer for it.
+- PR #1939 (Project Map chain) adds sidebar contributions and layout
+  composition upstream, and #1063 proposes placement conventions over the same
+  state object. The section this request asks for is the missing piece they
+  would stack onto.
 
 ### Open questions for the maintainer
 
