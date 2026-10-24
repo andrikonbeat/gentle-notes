@@ -16,6 +16,7 @@
 		"typecheck": "tsc --noEmit",
 		"check": "npm run typecheck && npm test",
 		"verify:package": "node scripts/verify-package-files.mjs",
+		"patch:shell-rail": "node scripts/patch-shell-rail.mjs",
 		"check:card-parity": "node scripts/check-card-parity.mjs"
 	},
 	"files": [
