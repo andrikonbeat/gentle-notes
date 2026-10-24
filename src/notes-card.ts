@@ -480,7 +480,7 @@ export function buildCompactNotesRow(
 	const previewRoom = inner - summaryStart - visibleWidth(counts);
 	const last = state.notes[state.notes.length - 1];
 	const preview = last && previewRoom >= 4 ? ` — ${truncateToWidth(sanitizeNoteText(last.text), previewRoom - 3, "…")}` : "";
-	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle: `${counts}${preview}`, body: [], tone: CARD_TONE.INFO, glyph: "" };
+	const card: PanelCard = { title: `Notes ${control.styled}`, subtitle: `${counts}${preview}`, body: [], tone: CARD_TONE.INFO };
 	// The control is hit-tested off the rendered header row, in both card
 	// styles: the outlined frame paints the same control inside its title, so a
 	// column derived from the float panel alone left it dead under NEON —

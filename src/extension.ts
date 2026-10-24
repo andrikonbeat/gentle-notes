@@ -1491,6 +1491,24 @@ const scrollNotes = (lines: number): void => {
 		},
 	});
 
+	pi.registerCommand(NOTE_ALIAS, {
+		description: "Gentle Notes: add a note straight from the chat",
+		handler: async (args, ctx) => {
+			sessionCtx = ctx;
+			const text = args.trim();
+			if (text) {
+				await saveNote(text);
+				return;
+			}
+			if (!ctx.hasUI) {
+				notify("Usage: /note <text>", "warning");
+				return;
+			}
+			const typed = await ctx.ui.input("New note", "Write the task you want the AI to do later…");
+			if (typed && typed.trim()) await saveNote(typed);
+		},
+	});
+
 	// Scroll the notes list by ±3 rows (S13): alt+pgup/pgdn. These are the
 	// keys the hint names — ctrl+shift+up/down is reserved by Pi for prompt
 	// navigation, and alt+shift+up/down is taken by the Todos extension.

@@ -417,14 +417,14 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("add compactable", project);
 		const widget = harness.buildWidget();
 		assert.equal(widget.render(80).length, 2);
-		const toggle = widget.handleMouse?.(mouse("click", 10, 0, 80));
+		const toggle = widget.handleMouse?.(mouse("click", 11, 0, 80));
 		assert.equal(toggle?.handled, true);
 		const expanded = widget.render(80);
 		assert.ok(expanded.length > 2, "the compact row grows into the list");
 		assert.equal(expanded.at(-1), "");
 		assert.ok(expanded[1]?.includes("▾ Collapse"), `header carries the collapse control: ${expanded[1]}`);
 		assert.ok(expanded.join("\n").includes("compactable"), "the expanded list shows the note");
-		widget.handleMouse?.(mouse("click", 10, 1, 80));
+		widget.handleMouse?.(mouse("click", 11, 1, 80));
 		assert.equal(widget.render(80).length, 2, "collapsing returns the one-line summary with its air");
 	});
 
@@ -468,7 +468,7 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("add desde el compacto", project);
 		const widget = harness.buildWidget();
 		widget.render(80);
-		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		widget.handleMouse?.(mouse("click", 11, 0, 80));
 		const { row, column } = glyphRow(widget.render(80));
 		widget.handleMouse?.(mouse("click", column, row, 80));
 		await FLUSH();
@@ -481,7 +481,7 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("add del compacto", project);
 		const widget = harness.buildWidget();
 		widget.render(80);
-		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		widget.handleMouse?.(mouse("click", 11, 0, 80));
 		const lines = widget.render(80);
 		// The expanded header also previews the last note, so the note's own
 		// row is the one that carries the send glyph with the text.
@@ -500,7 +500,7 @@ describe("gentle-notes extension wiring", () => {
 		await harness.runCommand("add del compacto enviada", project);
 		const widget = harness.buildWidget();
 		widget.render(80);
-		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		widget.handleMouse?.(mouse("click", 11, 0, 80));
 		const expanded = widget.render(80);
 		const row = expanded.findIndex((line) => line.includes("del compacto enviada") && line.includes("➤"));
 		assert.ok(row >= 0, `the expanded compact lists the note: ${JSON.stringify(expanded)}`);
@@ -527,7 +527,7 @@ describe("gentle-notes extension wiring", () => {
 		for (let id = 1; id <= 12; id++) await harness.runCommand(`add nota compacta numero ${id}`, project);
 		const widget = harness.buildWidget();
 		widget.render(80);
-		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		widget.handleMouse?.(mouse("click", 11, 0, 80));
 		const expanded = widget.render(80);
 		assert.ok(expanded.some((line) => line.includes("↑↓ 1–8/12")), `the hint reports the window: ${expanded.join(" | ")}`);
 
@@ -556,7 +556,7 @@ describe("gentle-notes extension wiring", () => {
 		for (let id = 1; id <= 12; id++) await harness.runCommand(`add nota compacta numero ${id}`, project);
 		const widget = harness.buildWidget();
 		widget.render(80);
-		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		widget.handleMouse?.(mouse("click", 11, 0, 80));
 		const expanded = widget.render(80);
 		// The hint carries the keyboard suffix "· alt+pgup/pgdn"
 		assert.ok(expanded.some((line) => line.includes("↑↓ 1–8/12 · alt+pgup/pgdn")), `compact hint has keyboard suffix: ${expanded.join(" | ")}`);
@@ -1720,7 +1720,7 @@ describe("gentle-notes extension wiring", () => {
 		await FLUSH();
 		const widget = harness.buildWidget();
 		widget.render(80);
-		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		widget.handleMouse?.(mouse("click", 11, 0, 80));
 		const lines = widget.render(80);
 		const row = lines.findIndex((line) => line.includes("compacta uno") && line.includes("✓"));
 		assert.ok(row >= 0, `the expanded compact lists the sent note: ${lines.join(" | ")}`);
@@ -1749,7 +1749,7 @@ describe("gentle-notes extension wiring", () => {
 		await FLUSH();
 		const widget = harness.buildWidget();
 		widget.render(80);
-		widget.handleMouse?.(mouse("click", 10, 0, 80));
+		widget.handleMouse?.(mouse("click", 11, 0, 80));
 		const lines = widget.render(80);
 		const headerRow = lines.findIndex((line) => line.includes("sent"));
 		assert.ok(headerRow >= 0, `the compact section header paints: ${lines.join(" | ")}`);

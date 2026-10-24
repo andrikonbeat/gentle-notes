@@ -132,7 +132,7 @@ describe("rail controls (S8)", () => {
 	});
 
 	it("finds each control's span on a rendered header, ANSI and all", () => {
-		const line = "\x1b[38;5;238m▎ \x1b[0m\x1b[38;5;114m✿ Notes \x1b[0m\x1b[38;5;114m▾ Collapse\x1b[0m \x1b[38;5;114m▾ Fold\x1b[0m";
+		const line = "\x1b[38;5;238m▎ \x1b[0m\x1b[38;5;114m✎ Notes \x1b[0m\x1b[38;5;114m▾ Collapse\x1b[0m \x1b[38;5;114m▾ Fold\x1b[0m";
 		assert.deepEqual(controlSpan(line, "▾ Collapse"), { start: 10, end: 19 });
 		assert.deepEqual(controlSpan(line, "▾ Fold"), { start: 21, end: 26 });
 		// Two identical chevrons: the search offset tells them apart by order.
@@ -564,7 +564,7 @@ describe("buildCompactNotesRow", () => {
 		assert.ok(row.includes("3 total, 2 pend"), `summary trails: ${row}`);
 		assert.ok(row.includes("— tres"), `the last note trails the counts: ${row}`);
 		assert.ok(row.startsWith(" \x1b[48;5;22m"), `tone background behind the line: ${row}`);
-		assert.deepEqual(view.control, { start: 10, end: 17 });
+		assert.deepEqual(view.control, { start: 11, end: 18 });
 		assert.equal(view.headerRow, 0);
 		assert.deepEqual(view.hits, []);
 	});
@@ -600,7 +600,7 @@ describe("buildCompactNotesRow", () => {
 		assert.equal(view.rows.length, 2);
 		assert.ok(view.rows[0]?.includes("▸"), `chevron survives the clip: ${view.rows[0]}`);
 		assert.ok(!view.rows[0]?.includes("Expand"), "the label drops when narrow");
-		assert.deepEqual(view.control, { start: 10, end: 10 }, "the visible chevron stays hit-testable");
+		assert.deepEqual(view.control, { start: 11, end: 11 }, "the visible chevron stays hit-testable");
 	});
 
 	it("paints the control with the hover role while the pointer is on it", () => {
@@ -616,7 +616,7 @@ describe("buildCompactNotesRow", () => {
 		assert.equal(view.rows.at(-1), "");
 		assert.equal(view.headerRow, 1);
 		assert.ok(view.rows[1]?.includes("▾ Collapse"), `header control flips: ${view.rows[1]}`);
-		assert.deepEqual(view.control, { start: 10, end: 19 });
+		assert.deepEqual(view.control, { start: 11, end: 20 });
 		assert.ok(view.rows[3]?.includes("uno"), `the list begins under the header: ${view.rows[3]}`);
 		assert.deepEqual(view.hits, [{ row: 3, id: 1 }, { row: 4, id: 3 }]);
 	});
@@ -673,10 +673,10 @@ describe("buildCompactNotesRow", () => {
 		// The outlined frame paints the same control inside its title, so it
 		// needs the same hit span the float panel gives it: without one the
 		// control renders and nothing can ever open the list under NEON.
-		assert.deepEqual(collapsed.control, { start: 10, end: 17 }, "the outlined control is clickable");
+		assert.deepEqual(collapsed.control, { start: 11, end: 18 }, "the outlined control is clickable");
 		const expanded = buildCompactNotesRow(mixedState(), floatTheme, 60, { collapsed: false });
 		assert.ok(expanded.rows.length > 2, "the list paints inside the frame");
 		assert.deepEqual(expanded.hits, [{ row: 1, id: 1 }, { row: 2, id: 3 }]);
-		assert.deepEqual(expanded.control, { start: 10, end: 19 }, "the expanded outlined control stays clickable");
+		assert.deepEqual(expanded.control, { start: 11, end: 20 }, "the expanded outlined control stays clickable");
 	});
 });
