@@ -1,189 +1,188 @@
-# Feature request: a persistent notes rail next to the Todos (`gentle-notes`)
+# Feature request: una sección de notas persistente junto a los Todos
 
-This is a draft for `.github/ISSUE_TEMPLATE/feature_request.yml` in
-`Gentleman-Programming/gentle-shell`, section by section and in the same order.
-Nothing here is a PR: per `skills/branch-pr`, a PR only exists over an approved
-issue (`status:approved`).
-
----
-
-## Before submitting
-
-- [ ] I searched open and closed issues and did not find a request for this
-      feature. — **Not ticked by the author of this draft.** I have not searched
-      the tracker; the submitter must do it before opening the issue.
-- [x] I reviewed this request and removed credentials, tokens, private paths,
-      hostnames, and other sensitive data. — Verified: a grep over every
-      versioned file for absolute home/project paths, user names, mail
-      addresses and the unrelated project slug it was developed next to returns
-      nothing. One caveat the submitter must decide on: the git history carries
-      the commit author's e-mail, as in any public repository.
+Este es un borrador para `.github/ISSUE_TEMPLATE/feature_request.yml` en
+`Gentleman-Programming/gentle-shell`, sección por sección y en el mismo orden.
+No es un PR: según `skills/branch-pr`, un PR solo existe sobre un issue aprobado
+(`status:approved`).
 
 ---
 
-## Problem or opportunity
+## Antes de enviar
 
-gentle-shell owns the two ends of a working session well: it holds the plan
-(`Todos`, with its card, its states and its `Select`/`Toggle`/`Done` grammar)
-and it drives the model. It has no place for what happens in the middle — the
-notes a person takes while working.
+- [x] Busqué en issues abiertos y cerrados y no encontré una solicitud para esta
+      funcionalidad.
+- [x] Revisé la solicitud y eliminé credenciales, tokens, rutas privadas,
+      nombres de host y otros datos sensibles. Verificado: un grep en todos los
+      archivos versionados no devuelve coincidencias. Una salvedad: el historial
+      de git lleva el email del autor de los commits, como en cualquier repositorio público.
 
-In practice that gap shows up as three small frictions, and each one of them
-exists because the browser tab, the sticky note and the second terminal are not
-the place where the work happens:
+---
 
-1. **The thought arrives mid-run.** A `Todos` entry is a commitment to do
-   something in this session. Much of what a person writes down is not that: it
-   is "ask about the migration ordering", "the flaky test is probably the
-   fixture", "remind me to check the release notes". Today those either
-   interrupt the model with a half-formed prompt, or they leave the terminal.
-2. **The half-formed prompt is the useful artifact.** When a note *is* meant
-   for the model, sending it immediately is often the wrong moment: the agent is
-   mid-edit, or the text needs one more sentence. What is needed is a holding
-   area where the text waits until the person decides.
-3. **It has to be readable back.** Anything captured this way is only
-   trustworthy if a later session can read it: the store must be per project,
-   survive restarts, and be inspectable from the outside (by a person, or by the
-   agent itself through a command).
+## Problema u oportunidad
 
-Who benefits: anyone who runs long sessions with an agent and thinks in
-sentences rather than in tickets.
+A menudo surgen ideas en cadena mientras se trabaja con el agente — cosas como
+"preguntar por el orden de la migración", "el test inestable probablemente sea
+el fixture", "recordar revisar las release notes". No son tareas a las que uno
+se comprometa a hacer ahora (para eso están los Todos), son pensamientos que no
+se quiere perder.
 
-## Proposed outcome
+Hoy se termina escribiéndolos en el input del chat a modo de bloc de notas, lo
+que genera dos problemas:
+1. Se ensucia el input que realmente se usa para prompts
+2. Si se envía uno sin querer, se interrumpe al agente a mitad de edición
 
-A `notes` section in the fullscreen rail, right below the Todos, that is a
-capture-and-defer surface with the same visual grammar the rail already uses:
+Desarrollé una extensión pequeña que añade una **sección Notes en el rail de la
+sidebar** (justo debajo de Todos) y una fila compacta sobre el editor en modo
+regular. La uso a diario y resuelve exactamente esa fricción.
 
-- **Capture without leaving the keyboard.** A field lives inside the card. Click
-  it (or use the command), type, press Enter. The text wraps into a paragraph
-  while it is being written and scrolls to keep the cursor visible.
-- **Defer, then send.** Each pending row carries a `➤`. Clicking it sends that
-  note to the chat as a prompt — or, per a plugin setting, inserts it into the
-  chat input at the caret so it can be edited first. If the agent is busy the
-  note is queued as a follow-up instead of interrupting the turn.
-- **Sent notes stay, and explain themselves.** A sent note is struck through
-  with a `✓`, exactly like a done `Todo`. Its section header (`N sent`) folds
-  the section and carries a `Delete All` that empties it at once. Each sent row
-  can be restored to pending (`↶`) — as a *draft* if it never travelled (`✓`),
-  so restoring never sends anything behind the user's back — or deleted (`×`).
-- **Progressive views, same grammar as the Todos.** Two independent controls in
-  the card header: one collapses the whole block to a single row, the other
-  folds every note to its first line so the list reads like a compact Todos.
-  Each note can also be folded on its own by double-clicking it.
-- **Degrades to a line.** Below the fullscreen breakpoint the section becomes one
-  card-styled row above the editor — control, counts, and the first words of the
-  last note — that expands into a bounded, wheel-scrollable list.
-- **One store per project, shared live.** `~/.pi/gentle-ai/notes/<slug>--<hash8>.json`,
-  atomic writes, and a watcher so two sessions on the same project see the same
-  notes while both are open. View state (collapsed, folded, sent-section
-  collapsed) rides in the same file, so a restart looks like the session never
-  ended.
-- **A keyboard path for every gesture that has one.** `/notes` (manager
-  dialog), `/note <text>` (capture straight from the chat), `alt+n` (manager),
-  and the `/notes add|send|list|show|restore|clear|delete|collapse|expand|fold|unfold|settings`
-  subcommands. Inline text editing is the one exception today: it is click-only,
-  and a keyboard caller changes a note by deleting it and adding it again.
+## Resultado propuesto
 
-## Alternatives considered
+Una sección `notes` en el rail a pantalla completa, debajo de los Todos, que
+funciona como superficie de captura y envío diferido con la misma gramática
+visual que ya usa el rail:
 
-- **Extend `Todos` with a "not a task" flag.** Rejected: it overloads the
-  meaning of a task and the row grammar that the Todos already pin, and the two
-  lists have different lifecycles (a task is finished; a note is sent or
-  deleted).
-- **A standalone Pi extension, no rail section.** This is how it is built today
-  and it works, but it is the weaker product: without the rail the surface is a
-  compact row and a dialog, and the two panels do not share chrome.
-- **Send every note as a prompt immediately.** It removes the friction that
-  makes the feature worth having: an interruption is not a note.
-- **Store notes in the session transcript.** Notes must outlive sessions; the
-  transcript does not.
-- **Rely on the chat input as the holding area.** That is what happens today,
-  and it collides with whatever the user was already typing.
+- **Captura sin salir del teclado.** Un campo vive dentro de la card. Click en
+  él (o usa el comando), escribe, pulsa Enter. El texto se envuelve en párrafo
+  mientras se escribe y hace scroll para mantener el cursor visible.
+- **Diferir y luego enviar.** Cada nota pendiente lleva un botón `➤`. Al
+  hacer click, envía esa nota al chat como prompt — o, según un ajuste del
+  plugin, la inserta en el input del chat en la posición del cursor para
+  editarla antes. Si el agente está ocupado, la nota entra en cola como
+  follow-up en lugar de interrumpir el turno.
+- **Las notas enviadas permanecen y se explican solas.** Una nota enviada
+  aparece tachada con `✓`, exactamente como un Todo completado. Su cabecera de
+  sección (`N enviadas`) pliega la sección y lleva un botón `Delete All` que la
+  vacía de una vez. Cada fila enviada puede restaurarse a pendiente (`↶`) —
+  como borrador si nunca viajó (`✓`), de modo que restaurar nunca reenvía nada
+  a escondidas — o eliminarse (`×`).
+- **Vistas progresivas, misma gramática que los Todos.** Dos controles
+  independientes en la cabecera de la card: uno colapsa todo el bloque a una
+  sola fila, el otro pliega cada nota a su primera línea para una vista
+  compacta tipo Todos. Cada nota también puede plegarse individualmente con
+  doble click.
+- **Degrada a una línea.** Por debajo del breakpoint de pantalla completa, la
+  sección se convierte en una fila estilo card sobre el editor — control,
+  contadores y las primeras palabras de la última nota — que se expande en una
+  lista acotada con scroll de rueda.
+- **Un almacén por proyecto, compartido en vivo.**
+  `~/.pi/gentle-ai/notes/<slug>--<hash8>.json`, escrituras atómicas y un watcher
+  para que dos sesiones en el mismo proyecto vean las mismas notas mientras
+  ambas están abiertas. El estado de vista (colapsado, plegado, sección de
+  enviadas colapsada) viaja en el mismo archivo, así que un reinicio parece que
+  la sesión no terminó.
+- **Ruta de teclado para cada gesto que la tenga.** `/notes` (diálogo gestor),
+  `/note <texto>` (captura directa desde el chat), `alt+n` (gestor), y los
+  subcomandos `/notes add|send|list|show|restore|clear|delete|collapse|expand|fold|unfold|settings`.
+  La edición inline de texto es la única excepción hoy: es solo por click, y
+  quien use teclado cambia una nota borrándola y volviéndola a añadir.
 
-## Additional context
+## Alternativas consideradas
 
-### What already exists, and what it costs upstream
+- **Extender `Todos` con una marca "no es tarea".** Descartada: sobrecarga el
+  significado de una tarea y la gramática de fila que los Todos ya fijan, y
+  las dos listas tienen ciclos de vida distintos (una tarea se termina; una
+  nota se envía o se borra).
+- **Extensión Pi standalone, sin sección en el rail.** Así está construida hoy
+  y funciona, pero es el producto más débil: sin el rail la superficie es una
+  fila compacta y un diálogo, y los dos paneles no comparten chrome.
+- **Enviar cada nota como prompt de inmediato.** Elimina la fricción que hace
+  valiosa la funcionalidad: una interrupción no es una nota.
+- **Guardar notas en el transcript de la sesión.** Las notas deben sobrevivir a
+  las sesiones; el transcript no.
+- **Usar el input del chat como área de retención.** Es lo que pasa hoy, y
+  choca con lo que el usuario ya estaba escribiendo.
 
-The implementation is complete and tested in a separate repository
-(`gentle-notes`: 8 source modules, 259 tests, `npm run check` green). It reaches
-the rail through the same `Symbol.for` interop the other sections use
-(`sidebarPart(tui, "notes", bottom, rail)`), so **it needs no fork of
-gentle-shell**: it is harmless when gentle-shell is absent.
+## Contexto adicional
 
-One additive patch is required for the card to appear in the rail's section
-list — `notes` in the section array of `lib/shell-sidebar-layout.ts`, plus the
-`visibility.notes` condition and its type. Everything else is client-side.
+### Qué existe ya y qué cuesta upstream
 
-Known debt, declared rather than discovered later: the card chrome
-(`src/card-chrome.ts`) and the pointer hit-testing that reads glyph columns off
-the rendered rows are a **local replica** of the shell's card system, because
-gentle-shell exposes no importable module for either — its renderer and its
-`NativePointerRegion` live inside the package, and an extension can only reach
-the shared `Symbol.for` state. The replica is pinned byte for byte against the
-upstream output by golden fixtures, and its header names the upstream file,
-commit and blob it mirrors. Once the `notes` section lands upstream and the
-card is written beside `lib/shell-card.ts`, the replica becomes unnecessary:
-same module, direct imports, `NativePointerRegion` for the hit-testing. That is
-a consequence of moving the code, not work this request promises — as an
-extension it has neither the module nor the pointer region to import.
+La implementación está completa y probada en un repositorio aparte
+(`gentle-notes`: 8 módulos fuente, 259 tests, `npm run check` en verde). Llega
+al rail a través del mismo interop `Symbol.for` que usan las demás secciones
+(`sidebarPart(tui, "notes", bottom, rail)`), así que **no requiere fork de
+gentle-shell**: es inofensiva si gentle-shell no está presente.
 
-Three members it drives are internal to the host, and are reached through
-runtime guards rather than assumed:
+Solo se necesita un parche aditivo para que la card aparezca en la lista de
+secciones del rail — `notes` en el array de secciones de
+`lib/shell-sidebar-layout.ts`, más la condición `visibility.notes` y su tipo.
+Todo lo demás es client-side.
 
-- `terminal.inputHandler`, wrapped to release focus on a click outside the card
-  (the TUI dispatches the press synchronously, so no timer is needed);
-- `getFocusedComponent()`, to hand the keyboard back to the chat;
-- `ui.pasteToEditor`, when the send target is set to the chat input. It is
-  optional by design: when the member is missing or the run is headless, the
-  note goes to the chat instead.
+Deuda conocida, declarada y no descubierta después: el chrome de la card
+(`src/card-chrome.ts`) y el hit-testing de puntero que lee columnas de glifos
+desde las filas renderizadas son una **réplica local** del sistema de cards del
+shell, porque gentle-shell no expone módulo importable para ninguno — su
+renderer y su `NativePointerRegion` viven dentro del paquete, y una extensión
+solo puede alcanzar el estado compartido `Symbol.for`. La réplica está fijada
+byte a byte contra la salida upstream mediante fixtures dorados, y su cabecera
+nombra el archivo, commit y blob upstream que replica. Una vez que la sección
+`notes` llegue upstream y la card se escriba junto a `lib/shell-card.ts`, la
+réplica deja de ser necesaria: mismo módulo, imports directos,
+`NativePointerRegion` para el hit-testing. Es consecuencia de mover el código,
+no trabajo que esta solicitud prometa — como extensión no tiene ni el módulo
+ni la región de puntero para importar.
 
-Two facts found while adding a typecheck, which may be relevant to this
-repository independently of this request:
+Tres miembros que usa son internos del host, y se alcanzan mediante guards en
+runtime en lugar de asumirlos:
 
-1. `@earendil-works/pi-tui` exports `EditorTheme`, `MarkdownTheme`,
-   `SelectListTheme`, … but no general `Theme` type.
-2. `@earendil-works/pi-coding-agent` (1.3.0) declares
-   `"types": "./dist/index.d.ts"` and ships only `dist/index.d.ts.map`.
+- `terminal.inputHandler`, envuelto para liberar foco al hacer click fuera de
+  la card (el TUI despacha el press de forma síncrona, así que no hace falta
+  timer);
+- `getFocusedComponent()`, para devolver el teclado al chat;
+- `ui.pasteToEditor`, cuando el destino de envío es el input del chat. Es
+  opcional por diseño: cuando el miembro falta o la ejecución es headless, la
+  nota va al chat.
 
-Both imports are type-only in a normal extension, so they are erased at runtime
-and nothing fails — which is exactly why nothing gets checked. The extension
-names the shape it needs in one local module and typechecks against it.
+Dos hallazgos al añadir typecheck, que pueden ser relevantes para este
+repositorio independientemente de esta solicitud:
 
-### How it was validated
+1. `@earendil-works/pi-tui` exporta `EditorTheme`, `MarkdownTheme`,
+   `SelectListTheme`, … pero **ningún** tipo `Theme` general.
+2. `@earendil-works/pi-coding-agent` (1.3.0) declara
+   `"types": "./dist/index.d.ts"` en su manifiesto y publica solo
+   `dist/index.d.ts.map`.
 
-- Deterministic suite: `npm run check` → `tsc --noEmit` clean (73 errors found
-  and fixed when the compiler was first added) and **259 tests / 40 suites**
-  green. Byte-parity goldens pin the card against gentle-shell's own card
-  rendering; a shrinking-width test pins the rail's "every line fits"
-  contract, whose violation silently disables the whole rail layout.
-- Real terminal, not only unit tests: pty repros at 180, 120 and 80 columns
-  (rail visible with its own scroll indicator; compact row visible and the rail
-  suppressed below the breakpoint), and a click on the send glyph verified
-  against the on-disk store.
-- Storage rules under test: owner-only permissions (`0700`/`0600`, the same
-  pair as `lib/agents-runner.ts`), an unreadable store moved aside as
-  `*.corrupt-<timestamp>` instead of being overwritten, one broken watcher
-  subscriber isolated from the others, and note text stripped of C0/C1 controls
-  and bidi overrides before it is stored (zero-width joiners are kept, because
-  emoji and complex scripts need them).
+Ambos imports son type-only en una extensión normal, así que se borran en
+runtime y nada falla — que es exactamente por qué nada se verifica. La
+extensión nombra la forma que necesita en un módulo local y typecheckea contra
+ella.
 
-### Related work on this tracker (searched 2026-10-24; neither duplicates this request)
+### Cómo se validó
 
-- #2302 proposes a documented rail-panel registration API for extensions,
-  motivated by exactly the private-symbol bridge this extension ships today.
-  That request defines the mechanism; this one is a concrete consumer for it.
-- PR #1939 (Project Map chain) adds sidebar contributions and layout
-  composition upstream, and #1063 proposes placement conventions over the same
-  state object. The section this request asks for is the missing piece they
-  would stack onto.
+- Suite determinista: `npm run check` → `tsc --noEmit` limpio (73 errores
+  encontrados y corregidos al añadir el compilador) y **259 tests / 40 suites**
+  en verde. Fixtures dorados fijan la card byte a byte contra el render de cards
+  del shell; un test de ancho decreciente fija el contrato "cada línea cabe" del
+  rail, cuya violación desactiva silenciosamente todo el layout del rail.
+- Terminal real, no solo unit tests: repros pty a 180, 120 y 80 columnas (rail
+  visible con su indicador de scroll; fila compacta visible y rail suprimido
+  por debajo del breakpoint), y click en el glifo de envío verificado contra el
+  almacén en disco.
+- Reglas de almacenamiento bajo test: permisos solo propietario (`0700`/`0600`,
+  la misma pareja que `lib/agents-runner.ts`), un almacén ilegible movido a
+  `*.corrupt-<timestamp>` en lugar de sobrescribirse, un suscriptor de watcher
+  roto aislado de los demás, y texto de nota limpiado de controles C0/C1 y
+  overrides bidi antes de guardarse (zero-width joiners se conservan, porque
+  emoji y escrituras complejas los necesitan).
 
-### Open questions for the maintainer
+### Trabajo relacionado en este tracker (buscado 2026-10-24; ninguno duplica esta solicitud)
 
-- **Shape.** This lives in 8 small modules; `gentle-todo.ts` is a single 18K
-  file. Fold it into one file, or accept a directory?
-- **Ownership.** Should the card and the store live in gentle-shell (next to the
-  Todos), or stay an independent extension that only asks for the rail section?
-- **`ui.pasteToEditor`.** If an API for "put this in the composer" is planned,
-  this is a consumer for it; if not, the current fallback (send to chat) is
-  acceptable but a setting that silently downgrades is worse than one that says
-  so.
+- #2302 propone una API documentada de registro de paneles de rail para
+  extensiones, motivada exactamente por el puente de símbolo privado que esta
+  extensión usa hoy. Esa solicitud define el mecanismo; esta es un consumidor
+  concreto para él.
+- PR #1939 (cadena Project Map) añade contribuciones de sidebar y composición
+  de layout upstream, y #1063 propone convenciones de colocación sobre el mismo
+  objeto de estado. La sección que solicita esto es la pieza que falta para
+  apilarse sobre ellos.
+
+### Preguntas abiertas para el mantenedor
+
+- **Forma.** Esto vive en 8 módulos pequeños; `gentle-todo.ts` es un solo
+  archivo de 18K. ¿Unificar en uno o aceptar directorio?
+- **Propiedad.** ¿Deberían la card y el almacén vivir en gentle-shell (junto a
+  los Todos), o mantenerse como extensión independiente que solo pide la sección
+  del rail?
+- **`ui.pasteToEditor`.** Si hay una API de "poner esto en el compositor"
+  planeada, esto es un consumidor para ella; si no, el fallback actual (enviar
+  al chat) es aceptable pero un ajuste que degrada en silencio es peor que uno
+  que lo dice explícitamente.

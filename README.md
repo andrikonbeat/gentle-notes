@@ -66,11 +66,21 @@ Today you type them in the chat input as a scratchpad. Two problems:
 
 ## Demo
 
+### Fullscreen rail (sidebar, ≥140 cols)
+
 <p align="center">
-  <img src="demo.gif" alt="gentle-notes demo" width="900"/>
+  <img src="demo-rail.gif" alt="gentle-notes — fullscreen rail demo"/>
 </p>
 
-> Terminal recording: capture notes from the chat, send through the picker, list everything.
+> Capture, collapse/expand, fold/unfold, send, restore, delete and the settings manager — all from the rail sidebar.
+
+### Compact mode (regular resolution)
+
+<p align="center">
+  <img src="demo-compact.gif" alt="gentle-notes — compact mode demo"/>
+</p>
+
+> The notepad degrades to one card-styled line above the chat input: preview, expand, send, restore, delete.
 
 ---
 
