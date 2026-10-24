@@ -64,6 +64,36 @@ Today you type them in the chat input as a scratchpad. Two problems:
 
 ---
 
+## Screenshots
+
+### Rail section (fullscreen ≥140 cols)
+
+<p align="center">
+  <img src="docs/assets/01.png" alt="Rail section with notes" width="700"/>
+</p>
+
+<p align="center">
+  <img src="docs/assets/02.png" alt="Rail section - sent notes" width="700"/>
+</p>
+
+### Compact mode (regular mode)
+
+<p align="center">
+  <img src="docs/assets/04.png" alt="Compact mode collapsed" width="500"/>
+</p>
+
+<p align="center">
+  <img src="docs/assets/05.png" alt="Compact mode expanded" width="500"/>
+</p>
+
+### Settings manager
+
+<p align="center">
+  <img src="docs/assets/03.png" alt="Settings manager (alt+n)" width="700"/>
+</p>
+
+---
+
 ## Quick start
 
 ```bash
