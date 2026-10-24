@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="gentle-notes banner" width="800"/>
+  <img src="docs/assets/banner.png" alt="gentle-notes banner" width="800"/>
 </p>
 
 <p align="center">

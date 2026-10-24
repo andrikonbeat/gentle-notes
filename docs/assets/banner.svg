@@ -36,7 +36,7 @@
       <path d="M8 18l4-4" stroke="#f472b6" stroke-width="2" stroke-linecap="round"/>
     </g>
     <text x="0" y="8" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="28" fill="#e5e7eb" font-weight="600" text-anchor="middle" letter-spacing="0.5">gentle-notes</text>
-    <text x="0" y="32" font-family="system-ui, sans-serif" font-size="13" fill="#6b7280" text-anchor="middle">Persistent notepad sidebar for gentle-shell & Pi</text>
+    <text x="0" y="32" font-family="system-ui, sans-serif" font-size="13" fill="#6b7280" text-anchor="middle">Persistent notepad sidebar for gentle-shell &amp; Pi</text>
   </g>
   
   <!-- Right: Status badges preview -->
