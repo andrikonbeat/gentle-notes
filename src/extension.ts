@@ -134,7 +134,7 @@ const HELP = [
 ].join("\n");
 
 export interface NotesArgs {
-	action: "manage" | "add" | "send" | "list" | "show" | "restore" | "clear" | "clearSent" | "help" | "collapse" | "expand" | "collapseSent" | "expandSent" | "fold" | "unfold" | "delete" | "edit" | "settings";
+	action: "manage" | "add" | "send" | "list" | "show" | "restore" | "clear" | "clearSent" | "help" | "collapse" | "expand" | "collapseSent" | "expandSent" | "fold" | "unfold" | "delete" | "edit" | "settings" | "note";
 	rest: string;
 	id?: number;
 }
@@ -148,6 +148,8 @@ export function parseNotesArgs(args: string): NotesArgs {
 	switch (head?.toLowerCase()) {
 		case "add":
 			return { action: "add", rest: payload };
+		case "note":
+			return { action: "note", rest: payload };
 		case "send": {
 			const first = rest[0];
 			const id = first !== undefined && /^\d+$/.test(first) ? Number.parseInt(first, 10) : undefined;
@@ -1403,6 +1405,20 @@ const scrollNotes = (lines: number): void => {
 						if (text && text.trim()) await saveNote(text);
 					}
 					return;
+				case "note":
+					// /note <text> - direct capture from chat (alias, not shown in palette)
+					const noteText = parsed.rest;
+					if (noteText) {
+						await saveNote(noteText);
+						return;
+					}
+					if (!ctx.hasUI) {
+						notify("Usage: /note <text>", "warning");
+						return;
+					}
+					const typed = await ctx.ui.input("New note", "Write the task you want the AI to do later…");
+					if (typed && typed.trim()) await saveNote(typed);
+					return;
 				case "send":
 					if (parsed.id !== undefined) await sendNote(parsed.id);
 					else await pickPendingToSend(ctx);
@@ -1464,25 +1480,6 @@ const scrollNotes = (lines: number): void => {
 					notify(HELP);
 					return;
 			}
-		},
-	});
-
-	pi.registerCommand(NOTE_ALIAS, {
-		description: "Gentle Notes: add a note straight from the chat",
-		handler: async (args, ctx) => {
-			sessionCtx = ctx;
-			const text = args.trim();
-			// The whole argument is the note: `/note call the dentist tomorrow`.
-			if (text) {
-				await saveNote(text);
-				return;
-			}
-			if (!ctx.hasUI) {
-				notify("Usage: /note <text>", "warning");
-				return;
-			}
-			const typed = await ctx.ui.input("New note", "Write the task you want the AI to do later…");
-			if (typed && typed.trim()) await saveNote(typed);
 		},
 	});
 

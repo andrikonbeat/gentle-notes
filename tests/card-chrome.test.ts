@@ -47,7 +47,7 @@ describe("golden parity with gentle-shell renderCard (panel mode)", () => {
 		(globalThis as Record<symbol, unknown>)[STYLE_SLOT] = "neon";
 		const lines = renderCardPanel(card, theme, 46, { hint: "alt+n", expanded: true });
 		assert.deepEqual(lines, [
-			"<border>╭</border><border>─ </border><accent>✿ Notes</accent> <muted>·</muted> <muted>2 pend · 1 sent</muted><border> ─────────</border> <dim>alt+n</dim> <border>╮</border>",
+			"<border>╭</border><border>─ </border><accent>✎ Notes</accent> <muted>·</muted> <muted>2 pend · 1 sent</muted><border> ─────────</border> <dim>alt+n</dim> <border>╮</border>",
 			"<border>│</border> <text><accent>✉</accent> revisar el paddi\u001b[0m…\u001b[0m <border>│</border>",
 			"<border>│</border> <text>footer del blog <muted>➤</muted></t\u001b[0m…\u001b[0m <border>│</border>",
 			"<border>│</border> <text><success>✓</success> <dim>~~mandar \u001b[0m…\u001b[0m <border>│</border>",
@@ -64,7 +64,7 @@ describe("golden parity with gentle-shell renderCard (panel mode)", () => {
 		const lines = renderCardPanel(card, theme, 46, { hint: "alt+n", expanded: true });
 		assert.deepEqual(lines, [
 			" [bg:toolSuccessBg]<border>▎</border><border>                                           </border>\u001b[49m ",
-			" [bg:toolSuccessBg]<border>▎</border> <accent>✿ Notes</accent>\u001b[0m[bg:toolSuccessBg]…\u001b[0m[bg:toolSuccessBg]\u001b[49m ",
+			" [bg:toolSuccessBg]<border>▎</border> <accent>✎ Notes</accent>\u001b[0m[bg:toolSuccessBg]…\u001b[0m[bg:toolSuccessBg]\u001b[49m ",
 			" [bg:toolSuccessBg]<border>▎</border><border>                                           </border>\u001b[49m ",
 			" [bg:toolSuccessBg]<border>▎</border> <text><accent>✉</accent> revisar el pad\u001b[0m[bg:toolSuccessBg]…\u001b[0m[bg:toolSuccessBg] <border> </border>\u001b[49m ",
 			" [bg:toolSuccessBg]<border>▎</border> <text>del footer del blog <muted>➤</mut\u001b[0m[bg:toolSuccessBg]…\u001b[0m[bg:toolSuccessBg] <border> </border>\u001b[49m ",

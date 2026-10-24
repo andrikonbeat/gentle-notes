@@ -225,9 +225,9 @@ function makeHarness(): Harness {
 			await command.handler(args, makeCtx(cwd));
 		},
 		runNoteAlias: async (args: string, cwd: string) => {
-			const command = commands.get("note");
-			assert.ok(command, "note alias command not registered");
-			await command.handler(args, makeCtx(cwd));
+			const command = commands.get("notes");
+			assert.ok(command, "notes command not registered");
+			await command.handler("note " + args, makeCtx(cwd));
 		},
 		feedInput: (data: string, duringDispatch?: () => void) => {
 			pendingDispatch = duringDispatch;
@@ -328,7 +328,7 @@ describe("gentle-notes extension wiring", () => {
 		assert.equal(typeof last.content, "function");
 	});
 
-	it("adds a note straight from the chat with /note <text>", async () => {
+	it("adds a note straight from the chat with /notes note <text>", async () => {
 		await harness.sessionStart(project);
 		await harness.runNoteAlias("llamar al dentista mañana", project);
 		const stored = loadNotes(project);
@@ -338,7 +338,7 @@ describe("gentle-notes extension wiring", () => {
 		assert.equal(harness.notifies[harness.notifies.length - 1]?.message, "Note saved");
 	});
 
-	it("collapses whitespace and rejects an empty /note argument", async () => {
+	it("collapses whitespace and rejects an empty /notes note argument", async () => {
 		await harness.sessionStart(project);
 		await harness.runNoteAlias("   ", project);
 		assert.equal(loadNotes(project).notes.length, 0, "a blank argument stores nothing");
@@ -358,7 +358,7 @@ describe("gentle-notes extension wiring", () => {
 		assert.match(message?.message ?? "", new RegExp(`max ${MAX_NOTE_LENGTH}`));
 	});
 
-	it("prompts for the note text when /note arrives without an argument", async () => {
+	it("prompts for the note text when /notes note arrives without an argument", async () => {
 		await harness.sessionStart(project);
 		harness.setInput("escrita desde el dialogo");
 		await harness.runNoteAlias("", project);
@@ -604,7 +604,7 @@ describe("gentle-notes extension wiring", () => {
 		const lines = harness.rail().render(46);
 		// Float chrome: padding, header, padding, the field row, closing padding.
 		assert.equal(lines.length, 5);
-		assert.ok(lines[1]?.includes("✿ Notes"), `header carries the card glyph and title: ${lines[1]}`);
+		assert.ok(lines[1]?.includes("✎ Notes"), `header carries the card glyph and title: ${lines[1]}`);
 		assert.ok(lines[1]?.includes("0 total, 0 pend"), "header carries the empty summary");
 		assert.ok(lines[3]?.includes("＋ Write a note…"), `the field paints its placeholder: ${lines[3]}`);
 		assert.ok(lines[3]?.includes("\x1b[48;5;22m"), "the field row carries the panel background");

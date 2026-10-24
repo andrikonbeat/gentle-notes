@@ -40,7 +40,7 @@ export function cardStyle(): CardStyle {
 	return (globalThis as typeof globalThis & Record<symbol, unknown>)[CARD_STYLE_SLOT] === CARD_STYLE.NEON ? CARD_STYLE.NEON : CARD_STYLE.FLOAT;
 }
 
-export const CARD_GLYPH = "✿";
+export const CARD_GLYPH = "✎";
 
 export interface PanelCard {
 	title: string;
