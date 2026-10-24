@@ -94,6 +94,16 @@ Today you type them in the chat input as a scratchpad. Two problems:
 
 ---
 
+## Demo
+
+<p align="center">
+  <img src="demo.gif" alt="gentle-notes demo" width="900"/>
+</p>
+
+> Terminal recording: capture notes from the chat, send through the picker, list everything.
+
+---
+
 ## Quick start
 
 ```bash
