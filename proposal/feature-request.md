@@ -105,7 +105,7 @@ capture-and-defer surface with the same visual grammar the rail already uses:
 ### What already exists, and what it costs upstream
 
 The implementation is complete and tested in a separate repository
-(`gentle-notes`: 8 source modules, 255 tests, `npm run check` green). It reaches
+(`gentle-notes`: 8 source modules, 259 tests, `npm run check` green). It reaches
 the rail through the same `Symbol.for` interop the other sections use
 (`sidebarPart(tui, "notes", bottom, rail)`), so **it needs no fork of
 gentle-shell**: it is harmless when gentle-shell is absent.
@@ -152,7 +152,7 @@ names the shape it needs in one local module and typechecks against it.
 ### How it was validated
 
 - Deterministic suite: `npm run check` → `tsc --noEmit` clean (73 errors found
-  and fixed when the compiler was first added) and **255 tests / 40 suites**
+  and fixed when the compiler was first added) and **259 tests / 40 suites**
   green. Byte-parity goldens pin the card against gentle-shell's own card
   rendering; a shrinking-width test pins the rail's "every line fits"
   contract, whose violation silently disables the whole rail layout.
