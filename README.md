@@ -1,168 +1,232 @@
-# Gentle Notes — a persistent notepad sidebar for Pi and gentle-shell
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="gentle-notes banner" width="800"/>
+</p>
 
-[![CI](https://github.com/andrikonbeat/gentle-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/andrikonbeat/gentle-notes/actions/workflows/ci.yml)
+<p align="center">
+  <strong>Persistent notepad sidebar for gentle-shell & Pi — capture thoughts, send them to the chat when ready.</strong>
+</p>
 
-Capture the tasks you want the AI to do later before you forget them, keep them
-glanceable in the sidebar, and send any note to the chat as a prompt when you
-are ready — one click from the rail, or one pick from the manager dialog.
+<p align="center">
+  <a href="https://github.com/andrikonbeat/gentle-notes/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/andrikonbeat/gentle-notes/ci.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white" alt="CI status"/>
+  </a>
+  <a href="https://github.com/andrikonbeat/gentle-notes/releases">
+    <img src="https://img.shields.io/github/v/release/andrikonbeat/gentle-notes?style=for-the-badge&logo=github&logoColor=white&color=f472b6" alt="Release"/>
+  </a>
+  <a href="https://www.npmjs.com/package/gentle-notes">
+    <img src="https://img.shields.io/npm/v/gentle-notes?style=for-the-badge&logo=npm&logoColor=white&color=cb3837" alt="npm version"/>
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/andrikonbeat/gentle-notes?style=for-the-badge&color=60a5fa" alt="License: MIT"/>
+  </a>
+  <a href="https://nodejs.org/">
+    <img src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node >=22.19"/>
+  </a>
+  <a href="https://github.com/andrikonbeat/gentle-notes/blob/main/package.json">
+    <img src="https://img.shields.io/badge/tests-259%20passing-6ee7b7?style=for-the-badge&logo=jest&logoColor=white" alt="259 tests passing"/>
+  </a>
+  <a href="https://github.com/andrikonbeat/gentle-notes/blob/main/tsconfig.json">
+    <img src="https://img.shields.io/badge/typecheck-strict%20%7C%20erasableSyntaxOnly-3178c6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript strict"/>
+  </a>
+</p>
 
-## Quick path
+<p align="center">
+  <img src="docs/assets/terminal-divider.svg" alt="divider" width="480"/>
+</p>
 
-1. Load the extension in your project session:
-   ```bash
-   pi --extension ./src
-   ```
-   (or copy/symlink this directory into `~/.pi/agent/extensions/gentle-notes/`)
-2. Press `alt+n` (or type `/notes`) and write your note. It survives restarts.
-3. Send it when ready: click the `➤` glyph next to the note in the sidebar
-   rail, or pick it from the manager. Sent notes render struck through with `✓`.
+---
 
-## Details
+## Why gentle-notes?
 
-| Topic | Behavior |
-|-------|----------|
-| Storage | One JSON file per project under `~/.pi/gentle-ai/notes/`, honoring `GENTLE_PI_CONFIG_HOME`. Atomic writes, serialized per file inside one process (see *One writer per process* below). |
-| Fullscreen sidebar | Paints as the `notes` rail section (below Todo) when gentle-shell supports it. Click the field to write (`Enter` saves, `Esc` — or a click anywhere else — returns the keyboard to the chat), click a note's text to edit it inline, double click to fold it back to its first line, click `➤` to send (its target is two columns wide on each side), and drive the block from the header controls (`▾ Collapse` / `▾ Fold`). The sent section header (`N sent  ▾ Collapse  Delete All`) folds the section from its own control and empties it with `Delete All`. |
-| Regular mode | One summary line above the editor with a blank line of air on each side: `Notes ▸ Expand  N total, M pend — <the last note's first words>`, the preview clipped to the window. Hidden while empty. |
-| While the agent runs | The note is queued as a follow-up prompt (`deliverAs: "followUp"`), never interrupting the current turn. |
-| Keyboard path | Everything works without a mouse: `/notes add <text>`, `/notes send [<id>]`, `/notes list`, `/notes show`, `/notes restore [<id>]`, `/notes clear`, `/notes clear sent`, `/notes delete <id>`, `/notes edit <id>`, `/notes collapse|expand|collapse sent|expand sent|fold|unfold`, or `alt+n` for settings. `/note <text>` captures from the chat. |
-| Send target | `/notes settings [chat\|editor]`, or the `✎  Send target` entry in the `/notes` manager (and `alt+n`). `chat` hands the note to the agent immediately; `editor` loads it into the chat's input so it can be edited before pressing Enter. The choice is plugin-wide and lives in `settings.json` beside the per-project stores, so it survives projects and restarts. |
-| Statuses | Pending `✉` (accent) → sent `✓` (success, dim, struck through, same grammar as gentle-shell's Todo). The sent count lives in its own section header, `N sent`, and the header summary keeps `total` and `pend` only. |
-| Trailing glyph | One delete glyph, `×`, across the whole card: a pending note the agent never saw carries it at the right edge, and a sent row carries it after its `↶`. A sent row's `↶` puts the note back in the pending list **without sending it again** — the way out of a mistaken restore — and its `×` removes that single note; the section header's `Delete All` removes all of them. |
-| Manager glyphs | The `alt+n` / `/notes` manager is now settings-only: `✎` send target, `×` clear pending, `×` clear all. No add button, no per-note entries. Pickers for send/restore are separate (`/notes send`, `/notes restore`). |
-| Visibility | `visibility.notes` on the shared sidebar state hides the section, mirroring `visibility.todo`. |
-| Shell updates | gentle-pi replaces itself at startup and its sidebar paints a hardcoded section list without `notes`, so an update makes the notes vanish from the sidebar until the local rail patch is re-applied: run `npm run patch:shell-rail` and restart Pi. `--check` reports whether the patch is present. |
+You're deep in a session with the agent. Ideas keep coming — *"ask about the migration ordering"*, *"the flaky test is probably the fixture"*, *"check the release notes"*. They're not tasks you're committing to *right now* (that's what **Todos** are for). They're thoughts you don't want to lose.
 
-## Install
+Today you type them in the chat input as a scratchpad. Two problems:
+1. **You clutter the input** you actually use for prompts
+2. **Accidental sends** interrupt the agent mid-edit
 
-Pi loads an extension from a file, or from a directory that has an `index.ts`
-entry point — this repository offers both, and neither needs a build step (Pi
-uses jiti, Node strips the types).
+**gentle-notes** adds a **Notes section in the sidebar rail** (right below Todos) and a compact row above the editor in regular mode. Click, type, Enter — saved. Click `➤` when you're ready to send. It's that simple.
+
+---
+
+## Features at a glance
+
+| | |
+|---|---|
+| **📍 Rail section (fullscreen ≥140 col)** | Lives below Todos in the gentle-shell sidebar. Always visible, always ready. |
+| **📝 Inline capture** | Click the field → type → Enter. Text wraps naturally while you type. |
+| **➤ Deferred send** | Each note gets a send button. Click when ready. Busy agent? Queued as follow-up, never interrupts. |
+| **✓ Sent history** | Sent notes stay struck-through with `✓`, same visual grammar as done Todos. |
+| **📂 Fold & collapse** | Collapse the whole block, or fold every note to its first line — copied from Todos card. |
+| **📱 Compact mode** | Below breakpoint: one card-styled line above editor with preview + expand. |
+| **💾 Persistent per project** | `~/.pi/gentle-ai/notes/<slug>--<hash>.json` — survives restarts, shared across sessions. |
+| **⌨️ Keyboard-first** | `/note "text"`, `/notes send`, `alt+n`, `alt+pgup/pgdn` — everything works without a mouse. |
+| **🔒 Safe storage** | Owner-only permissions (`0700`/`0600`), corrupt stores preserved (`.corrupt-<ts>`), watcher isolation, input sanitization (C0/C1/bidi stripped, ZWJ kept). |
+
+---
+
+## Quick start
 
 ```bash
-# Try it from a checkout, installing nothing:
+# Try it instantly (no install):
 pi --extension /path/to/gentle-notes
 
-# Or make it permanent, for every project:
+# Permanent for all projects:
 ln -s /path/to/gentle-notes ~/.pi/agent/extensions/gentle-notes
+
+# Per-project only:
+ln -s /path/to/gentle-notes .pi/extensions/gentle-notes
 ```
 
-For one project only, put the same link inside `.pi/extensions/` in that
-project (project extensions load after project trust is granted).
+> **No build step needed** — Pi uses jiti, Node strips types. The repo *is* the extension.
 
-It runs with or without gentle-shell. On its own you get the `/notes` command,
-the `/note <text>` alias, the `alt+n` manager and the compact row above the
-editor. Inside gentle-shell's fullscreen rail you also get the `notes` card,
-next to the Todos.
-
-To uninstall: remove the link or directory, and delete
-`~/.pi/gentle-ai/notes/` if you want the stored notes gone too.
+---
 
 ## Requirements
 
-- The rail section needs a gentle-shell that lists `notes` among its sidebar
-  sections. Until that lands upstream, everything else works: the compact row,
-  the `/notes` command and the `alt+n` manager.
-- The patch lives in this repository: `npm run patch:shell-rail` re-applies it
-  to the installed gentle-pi (two lines: the rail section list and the
-  `visibility.notes` flag), refuses anything it does not recognise, and is safe
-  to run after every gentle-pi update. The upstream-facing form of the same
-  change — the diff plus its upstream test — is versioned under
-  `proposal/rail-patch/`.
+| | |
+|---|---|
+| **gentle-shell** | For the rail section, gentle-shell must include `notes` in its sidebar sections. |
+| **Stopgap patch** | Until upstream merges it, run `npm run patch:shell-rail` after each gentle-pi update. |
 
-## How it works
+The patch is **18 lines across 3 files** — adds `notes` to the section list and `visibility.notes` type. Everything else lives in this extension (no fork needed, harmless without gentle-shell).
 
-| Module | Responsibility |
-|--------|----------------|
-| `src/notes-state.ts` | Pure model: statuses, add/markSent/clear/summary, validation. |
-| `src/storage.ts` | Per-project JSON persistence: atomic tmp+rename, per-file mutation queue, owner-only modes, unreadable stores kept aside instead of overwritten. |
-| `src/notes-card.ts` | Pure rendering: glyphs, strikethrough, folding, compact row, hit map. |
-| `src/sidebar-interop.ts` | Symbol-based interop with gentle-shell's rail state; no runtime dependency on where gentle-pi is installed. |
-| `src/extension.ts` | The Pi extension: command, shortcut, dialogs, send, interactive rail card. |
-| `src/host-contract.ts` | The slice of the Pi/gentle-shell host API this extension uses, typed locally (see below). |
+---
 
-The extension never imports gentle-pi at runtime: it registers its rail part
-through the shared terminal-owned state (`Symbol.for`), so it works no matter
-where the gentle-pi package is installed, and stays harmless without
-gentle-shell.
+## Installation details
 
-### Storage and hygiene
+### Permanent (recommended)
+```bash
+ln -s /path/to/gentle-notes ~/.pi/agent/extensions/gentle-notes
+```
+Loads automatically on every `pi` start. Works across all your projects.
 
-The store is the user's own writing, so it is treated that way:
+### Per-project
+```bash
+ln -s /path/to/gentle-notes .pi/extensions/gentle-notes
+```
+Loads after project trust is granted. Isolated to that project.
 
-- **Owner-only permissions.** The notes directory is created `0700` and the
-  file written `0600`, the same pair every gentle-shell store uses. An existing
-  directory keeps the permissions you gave it.
-- **No silent loss.** If the file on disk is unreadable, it is renamed
-  `*.corrupt-<timestamp>` before anything new is written. If that rename fails,
-  the save is refused and the error is reported instead of overwriting your
-  notes.
-- **No terminal escapes.** Note text is stripped of C0/C1 controls, bidi
-  overrides and zero-width padding before it is stored, so a note can neither
-  emit an escape sequence nor reorder the row it is painted in. Zero-width
-  joiners are kept, because emoji sequences and complex scripts need them.
-- **Bounded input.** A note is capped at 2000 characters; longer text is
-  rejected with an explicit message rather than silently truncated.
-- **Watcher isolation.** The file watcher that keeps concurrent sessions in
-  sync calls each subscriber inside its own try/catch: a repaint against a
-  disposed TUI cannot take down the session.
-- **One writer per process.** Mutations are queued per file inside a process,
-  and the write is atomic, so a reader never sees a torn file. Two *processes*
-  on the same project still resolve last-writer-wins: the file is never
-  corrupted, but the slower of two simultaneous writes is the one that stays.
+### One-off
+```bash
+pi --extension /path/to/gentle-notes
+```
+Great for testing. No persistence across restarts.
+
+---
+
+## Keyboard reference
+
+| Command | Action |
+|---------|--------|
+| `/note "text"` | Capture note from chat input |
+| `/notes add "text"` | Same as above (alias) |
+| `/notes send` | Open picker, choose note to send |
+| `/notes list` | Show all notes |
+| `/notes show` | Show last note |
+| `/notes restore [id]` | Move sent → pending |
+| `/notes delete [id]` | Delete a note |
+| `/notes clear` | Delete all (with confirmation) |
+| `/notes clear sent` | Delete only sent notes |
+| `/notes edit <id>` | Load note into field for editing |
+| `/notes collapse\|expand` | Toggle block collapse |
+| `/notes fold\|unfold` | Toggle fold-all mode |
+| `/notes settings` | Open settings manager |
+| `alt+n` | Open settings manager |
+| `alt+pgup/pgdn` | Scroll rail/compact list |
+
+> **Manager (`alt+n` / `/notes`)** is settings-only: send target (`chat`/`editor`), clear pending, clear all. No note listing — pickers are separate (`/notes send`, `/notes restore`).
+
+---
+
+## Architecture
+
+```
+src/
+├── notes-state.ts       # Pure model: add, markSent, clear, summary, validation
+├── storage.ts           # Per-project JSON: atomic writes, mutation queue, owner-only perms
+├── notes-card.ts        # Pure rendering: glyphs, strikethrough, folding, hit maps
+├── sidebar-interop.ts   # Symbol.for interop with gentle-shell rail (no runtime dep)
+├── extension.ts         # Pi extension: commands, shortcuts, dialogs, rail card
+├── host-contract.ts     # Typed slice of Pi/gentle-shell API used by this extension
+├── settings.ts          # Plugin-wide settings (send target) persisted per project
+└── card-chrome.ts       # Local replica of gentle-shell card system (NEON/FLOAT)
+```
+
+**Zero runtime dependency on gentle-pi** — registers via `Symbol.for` shared state.
+
+---
 
 ## Development
 
 ```bash
-npm run check           # typecheck + tests — what CI runs
-npm test                # node --test "tests/*.test.ts" (Node >= 22, native TS)
+npm run check           # typecheck + tests (what CI runs)
+npm test                # node --test "tests/*.test.ts"
 npm run typecheck       # tsc --noEmit
-npm run verify:package  # pack, then assert the tarball carries what Pi loads
-npm run check:card-parity # dev only: our card vs gentle-shell's own (needs the clone)
+npm run verify:package  # pack + assert tarball contents
+npm run check:card-parity # byte-parity vs gentle-shell renderCard
+npm run patch:shell-rail  # apply/verify rail patch to installed gentle-pi
 ```
 
-`.github/workflows/ci.yml` runs `npm run check` and `npm run verify:package` on
-Node 22 and 24, on Linux and macOS, and installs the packed tarball into a
-scratch project — the same three gates gentle-shell asks of its own pull
-requests. macOS is in the matrix on purpose: the store relies on atomic rename
-and on file modes, and both behave differently there.
+**CI** (`.github/workflows/ci.yml`): Node 22 & 24 × Linux & macOS — same three gates gentle-shell uses for its own PRs.
 
-225 tests over 38 suites: pure modules, rendering, and an integration harness
-with mocked Pi surfaces that exercises the whole wiring (registration, session
-lifecycle, click-to-send, busy queueing, restore, visibility, shutdown), plus
-the storage rules above (permissions, corrupt store recovery, watcher
-isolation).
+---
 
-`tsconfig.json` keeps `strict` and `erasableSyntaxOnly` on, so everything that
-typechecks also runs under Node's native type stripping — no build step, no
-loader.
+## Project structure
 
-### Why `src/host-contract.ts`
+```
+gentle-notes/
+├── index.ts                 # Extension entry point (directory loadable)
+├── package.json
+├── tsconfig.json            # strict, erasableSyntaxOnly
+├── LICENSE                  # MIT
+├── README.md
+├── src/                     # 8 modules, ~140KB
+├── tests/                   # 40 suites, 259 tests
+├── scripts/
+│   ├── patch-shell-rail.mjs     # Idempotent rail patch CLI
+│   ├── verify-package-files.mjs # Package content verification
+│   └── check-card-parity.mjs    # Visual parity test
+├── proposal/
+│   ├── feature-request.md       # Upstream issue template
+│   └── rail-patch/
+│       ├── notes-rail.patch     # git diff (18 lines, 3 files)
+│       └── README.md
+├── odd/
+│   └── tasks/gentle-notes.md    # Feature spec + task log
+└── docs/assets/               # Banner, divider
+```
 
-Two measured facts about the published packages:
+---
 
-- `@earendil-works/pi-tui` exports `EditorTheme`, `MarkdownTheme`, … but **no**
-  general `Theme` type.
-- `@earendil-works/pi-coding-agent` declares `"types": "./dist/index.d.ts"` in
-  its manifest and ships only `dist/index.d.ts.map`.
+## Contributing
 
-Both imports were type-only, so they were erased at runtime and nothing ever
-failed — which is exactly why nothing was checked. The shape lives in one
-reviewable file instead, and `npm run typecheck` verifies every member the
-extension touches, including the ones behind runtime guards
-(`ui.pasteToEditor`, `rail.blur`, `component.dispose`). If upstream publishes
-those declarations, delete the module and import theirs.
+Issues and PRs welcome. For feature work, please open an issue first (issue-first policy, same as gentle-shell).
 
-- Feature spec and task log: `odd/tasks/gentle-notes.md`
-- Rail patch: `scripts/patch-shell-rail.mjs` applies it to an installed
-  gentle-pi; `proposal/rail-patch/` is the upstream-facing form (the clone it
-  came from is gitignored)
+```bash
+# Local verification before PR
+npm run check
+npm run verify:package
+```
 
-## Next step
+---
 
-Open the feature request (`proposal/feature-request.md`) as an issue in
-`Gentleman-Programming/gentle-shell` and wait for `status:approved` — this
-repository does not open a PR without an approved issue. Only after that does
-the rail section become a pull request; until then, run
-`npm run patch:shell-rail` after every gentle-pi update and load the extension
-in your daily gentle-shell session.
+## Related
+
+- **gentle-shell** — The shell this extends: https://github.com/Gentleman-Programming/gentle-shell
+- **Pi** — The coding agent platform: https://github.com/earendil-works/pi-coding-agent
+- **Upstream feature request** — https://github.com/Gentleman-Programming/gentle-shell/issues/2513
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).  
+Built by [Andrik](https://github.com/andrikonbeat). Part of the Gentleman Programming ecosystem.
+
+<p align="center">
+  <img src="docs/assets/terminal-divider.svg" alt="divider" width="480"/>
+</p>
+
+<p align="center">
+  <sub>gentle-notes · persistent notepad for the agent you lead</sub>
+</p>
